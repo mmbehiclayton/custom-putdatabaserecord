@@ -65,10 +65,6 @@ import static org.apache.nifi.expression.ExpressionLanguageScope.FLOWFILE_ATTRIB
     "using operation_id from FlowFile attributes. Retains all original PutDatabaseRecord functionality.")
 @ReadsAttribute(attribute = "operation.id", description = "Operation ID used to look up environment configuration")
 @WritesAttribute(attribute = "validation.passed", description = "true if validation passed")
-@WritesAttribute(attribute = "validation.environment.id", description = "Environment ID used for validation")
-@WritesAttribute(attribute = "validation.environment.name", description = "Environment name")
-@WritesAttribute(attribute = "validation.timestamp", description = "Validation timestamp")
-@WritesAttribute(attribute = "validation.error", description = "Validation error message if failed")
 @UseCase(description = "Insert records into a database with environment validation")
 public class ValidatedPutDatabaseRecord extends PutDatabaseRecord {
     
