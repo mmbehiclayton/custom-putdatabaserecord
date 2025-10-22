@@ -1,0 +1,4 @@
+com\sensys\nifi\processors\ValidatedPutDatabaseRecord$ValidationResultEx.class
+com\sensys\nifi\processors\ValidatedPutDatabaseRecord$EnvironmentConfig.class
+com\sensys\nifi\processors\PutDatabaseRecord.class
+com\sensys\nifi\processors\ValidatedPutDatabaseRecord.class
