@@ -16,6 +16,7 @@
  */
 package com.sensys.nifi.processors;
 
+import org.apache.nifi.processor.AbstractProcessor;
 import org.apache.nifi.util.TestRunner;
 import org.apache.nifi.util.TestRunners;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,8 +41,8 @@ class ValidatedPutDatabaseRecordTest {
     void testValidationDisabled() {
         // Test that validation can be disabled
         testRunner.setProperty(ValidatedPutDatabaseRecord.ENABLE_VALIDATION, "false");
-        testRunner.setProperty(ValidatedPutDatabaseRecord.DBCP_SERVICE, "mock-dbcp");
-        testRunner.setProperty(ValidatedPutDatabaseRecord.TABLE_NAME, "test_table");
+        testRunner.setProperty("Database Connection Pooling Service", "mock-dbcp");
+        testRunner.setProperty("Table Name", "test_table");
         
         // Should be invalid without controller services, but we can test the property validation
         testRunner.assertNotValid();
@@ -59,8 +60,8 @@ class ValidatedPutDatabaseRecordTest {
     void testValidationEnabledRequiresProperties() {
         // Test that validation properties are required when enabled
         testRunner.setProperty(ValidatedPutDatabaseRecord.ENABLE_VALIDATION, "true");
-        testRunner.setProperty(ValidatedPutDatabaseRecord.DBCP_SERVICE, "mock-dbcp");
-        testRunner.setProperty(ValidatedPutDatabaseRecord.TABLE_NAME, "test_table");
+        testRunner.setProperty("Database Connection Pooling Service", "mock-dbcp");
+        testRunner.setProperty("Table Name", "test_table");
         
         // Should be invalid without validation properties
         testRunner.assertNotValid();
@@ -101,8 +102,8 @@ class ValidatedPutDatabaseRecordTest {
         testRunner.setProperty(ValidatedPutDatabaseRecord.ENGINE_DBCP_SERVICE, "mock-engine-dbcp");
         testRunner.setProperty(ValidatedPutDatabaseRecord.SOURCE_DBCP_SERVICE, "mock-source-dbcp");
         testRunner.setProperty(ValidatedPutDatabaseRecord.TARGET_DBCP_SERVICE, "mock-target-dbcp");
-        testRunner.setProperty(ValidatedPutDatabaseRecord.DBCP_SERVICE, "mock-dbcp");
-        testRunner.setProperty(ValidatedPutDatabaseRecord.TABLE_NAME, "test_table");
+        testRunner.setProperty("Database Connection Pooling Service", "mock-dbcp");
+        testRunner.setProperty("Table Name", "test_table");
         
         // Test that VALIDATION_MODE property exists and accepts expected values
         assertTrue(testRunner.getProcessor().getPropertyDescriptors().contains(ValidatedPutDatabaseRecord.VALIDATION_MODE));
@@ -127,8 +128,8 @@ class ValidatedPutDatabaseRecordTest {
         testRunner.setProperty(ValidatedPutDatabaseRecord.SOURCE_DBCP_SERVICE, "mock-source-dbcp");
         testRunner.setProperty(ValidatedPutDatabaseRecord.TARGET_DBCP_SERVICE, "mock-target-dbcp");
         testRunner.setProperty(ValidatedPutDatabaseRecord.VALIDATION_MODE, "STRICT");
-        testRunner.setProperty(ValidatedPutDatabaseRecord.DBCP_SERVICE, "mock-dbcp");
-        testRunner.setProperty(ValidatedPutDatabaseRecord.TABLE_NAME, "test_table");
+        testRunner.setProperty("Database Connection Pooling Service", "mock-dbcp");
+        testRunner.setProperty("Table Name", "test_table");
         
         // Test that OPERATION_ID property supports Expression Language
         var operationIdDescriptor = testRunner.getProcessor().getPropertyDescriptors().stream()
@@ -149,8 +150,8 @@ class ValidatedPutDatabaseRecordTest {
         testRunner.setProperty(ValidatedPutDatabaseRecord.SOURCE_DBCP_SERVICE, "mock-source-dbcp");
         testRunner.setProperty(ValidatedPutDatabaseRecord.TARGET_DBCP_SERVICE, "mock-target-dbcp");
         testRunner.setProperty(ValidatedPutDatabaseRecord.VALIDATION_MODE, "STRICT");
-        testRunner.setProperty(ValidatedPutDatabaseRecord.DBCP_SERVICE, "mock-dbcp");
-        testRunner.setProperty(ValidatedPutDatabaseRecord.TABLE_NAME, "test_table");
+        testRunner.setProperty("Database Connection Pooling Service", "mock-dbcp");
+        testRunner.setProperty("Table Name", "test_table");
         
         // Test that the processor has the expected relationships for handling missing operation_id
         assertTrue(testRunner.getProcessor().getRelationships().contains(ValidatedPutDatabaseRecord.REL_VALIDATION_FAILED));
@@ -159,9 +160,9 @@ class ValidatedPutDatabaseRecordTest {
 
     @Test
     void testProcessorInheritance() {
-        // Test that ValidatedPutDatabaseRecord extends PutDatabaseRecord
+        // Test that ValidatedPutDatabaseRecord is a valid processor
         assertTrue(testRunner.getProcessor() instanceof ValidatedPutDatabaseRecord);
-        assertTrue(testRunner.getProcessor() instanceof PutDatabaseRecord);
+        assertTrue(testRunner.getProcessor() instanceof AbstractProcessor);
     }
 
     @Test

@@ -6,7 +6,7 @@
 
     <groupId>com.sensys.nifi</groupId>
     <artifactId>nifi-custom-putdbrecord-bundle</artifactId>
-    <version>1.0.0</version>
+    <version>2.1.0</version>
     <packaging>pom</packaging>
 
     <name>NiFi Custom PutDatabaseRecord Bundle</name>
@@ -24,6 +24,20 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <nifi.version>2.1.0</nifi.version>
     </properties>
+
+    <repositories>
+        <repository>
+            <id>apache.snapshots</id>
+            <name>Apache Snapshot Repository</name>
+            <url>https://repository.apache.org/snapshots</url>
+            <releases>
+                <enabled>false</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
 
     <dependencyManagement>
         <dependencies>

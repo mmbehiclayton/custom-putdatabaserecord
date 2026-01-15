@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.sensys.nifi.processors;
+package org.apache.nifi.processors.standard;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -32,7 +32,14 @@ import org.apache.nifi.components.PropertyDescriptor;
 import org.apache.nifi.components.PropertyDescriptor.Builder;
 import org.apache.nifi.components.ValidationContext;
 import org.apache.nifi.components.ValidationResult;
-// Database dialect service imports removed due to missing dependencies
+import org.apache.nifi.database.dialect.service.api.ColumnDefinition;
+import org.apache.nifi.database.dialect.service.api.DatabaseDialectService;
+import org.apache.nifi.database.dialect.service.api.StandardColumnDefinition;
+import org.apache.nifi.database.dialect.service.api.StandardStatementRequest;
+import org.apache.nifi.database.dialect.service.api.StatementRequest;
+import org.apache.nifi.database.dialect.service.api.StatementResponse;
+import org.apache.nifi.database.dialect.service.api.StatementType;
+import org.apache.nifi.database.dialect.service.api.TableDefinition;
 import org.apache.nifi.dbcp.DBCPService;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.logging.ComponentLog;
@@ -44,11 +51,12 @@ import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.processor.util.pattern.RollbackOnFailure;
-import com.sensys.nifi.processors.db.ColumnDescription;
-import com.sensys.nifi.processors.db.NameNormalizer;
-import com.sensys.nifi.processors.db.NameNormalizerFactory;
-import com.sensys.nifi.processors.db.TableSchema;
-import com.sensys.nifi.processors.db.TranslationStrategy;
+import org.apache.nifi.processors.standard.db.ColumnDescription;
+import org.apache.nifi.processors.standard.db.DatabaseAdapterDescriptor;
+import org.apache.nifi.processors.standard.db.NameNormalizer;
+import org.apache.nifi.processors.standard.db.NameNormalizerFactory;
+import org.apache.nifi.processors.standard.db.TableSchema;
+import org.apache.nifi.processors.standard.db.TranslationStrategy;
 import org.apache.nifi.record.path.FieldValue;
 import org.apache.nifi.record.path.RecordPath;
 import org.apache.nifi.record.path.RecordPathResult;
@@ -73,7 +81,6 @@ import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLIntegrityConstraintViolationException;
@@ -103,17 +110,22 @@ import static org.apache.nifi.expression.ExpressionLanguageScope.FLOWFILE_ATTRIB
 import static org.apache.nifi.expression.ExpressionLanguageScope.NONE;
 
 @InputRequirement(Requirement.INPUT_REQUIRED)
-@Tags({"sql", "record", "jdbc", "put", "database", "update", "insert", "delete", "validation", "environment", "sensys", "sse"})
-@CapabilityDescription("Puts records into a target database with environment validation. " +
-    "Extends the standard PutDatabaseRecord processor to validate that controller services " +
-    "match the expected environment configuration by querying the SSE Engine database " +
-    "using operation_id from FlowFile attributes. Retains all original PutDatabaseRecord functionality.")
-@ReadsAttribute(attribute = "operation.id", description = "Operation ID used to look up environment configuration")
-@WritesAttribute(attribute = "validation.passed", description = "true if validation passed")
-@UseCase(description = "Insert records into a database with environment validation")
-public class ValidatedPutDatabaseRecord extends AbstractProcessor {
+@Tags({"sql", "record", "jdbc", "put", "database", "update", "insert", "delete"})
+@CapabilityDescription("The PutDatabaseRecord processor uses a specified RecordReader to input (possibly multiple) records from an incoming flow file. These records are translated to SQL "
+        + "statements and executed as a single transaction. If any errors occur, the flow file is routed to failure or retry, and if the records are transmitted successfully, "
+        + "the incoming flow file is "
+        + "routed to success.  The type of statement executed by the processor is specified via the Statement Type property, which accepts some hard-coded values such as INSERT, UPDATE, and DELETE, "
+        + "as well as 'Use statement.type Attribute', which causes the processor to get the statement type from a flow file attribute.  IMPORTANT: If the Statement Type is UPDATE, then the incoming "
+        + "records must not alter the value(s) of the primary keys (or user-specified Update Keys). If such records are encountered, the UPDATE statement issued to the database may do nothing "
+        + "(if no existing records with the new primary key values are found), or could inadvertently corrupt the existing data (by changing records for which the new values of the primary keys "
+        + "exist).")
+@ReadsAttribute(attribute = PutDatabaseRecord.STATEMENT_TYPE_ATTRIBUTE, description = "If 'Use statement.type Attribute' is selected for the Statement Type property, the value of this attribute "
+        + "will be used to determine the type of statement (INSERT, UPDATE, DELETE, SQL, etc.) to generate and execute.")
+@WritesAttribute(attribute = PutDatabaseRecord.PUT_DATABASE_RECORD_ERROR, description = "If an error occurs during processing, the flow file will be routed to failure or retry, and this attribute "
+        + "will be populated with the cause of the error.")
+@UseCase(description = "Insert records into a database")
+public class PutDatabaseRecord extends AbstractProcessor {
 
-    // Standard PutDatabaseRecord constants
     public static final String UPDATE_TYPE = "UPDATE";
     public static final String INSERT_TYPE = "INSERT";
     public static final String DELETE_TYPE = "DELETE";
@@ -124,6 +136,7 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     public static final String USE_RECORD_PATH = "Use Record Path";
 
     static final String STATEMENT_TYPE_ATTRIBUTE = "statement.type";
+
     static final String PUT_DATABASE_RECORD_ERROR = "putdatabaserecord.error";
 
     static final AllowableValue IGNORE_UNMATCHED_FIELD = new AllowableValue("Ignore Unmatched Fields", "Ignore Unmatched Fields",
@@ -146,30 +159,23 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             .description("Successfully created FlowFile from SQL query result set.")
             .build();
 
-    public static final Relationship REL_RETRY = new Relationship.Builder()
+    static final Relationship REL_RETRY = new Relationship.Builder()
             .name("retry")
             .description("A FlowFile is routed to this relationship if the database cannot be updated but attempting the operation again may succeed")
             .build();
-    public static final Relationship REL_FAILURE = new Relationship.Builder()
+    static final Relationship REL_FAILURE = new Relationship.Builder()
             .name("failure")
             .description("A FlowFile is routed to this relationship if the database cannot be updated and retrying the operation will also fail, "
                     + "such as an invalid query or an integrity constraint violation")
             .build();
 
-    // Additional relationship for validation failures
-    public static final Relationship REL_VALIDATION_FAILED = new Relationship.Builder()
-            .name("validation_failed")
-            .description("FlowFiles that fail environment validation are routed to this relationship")
-            .build();
-
     private static final Set<Relationship> RELATIONSHIPS = Set.of(
             REL_SUCCESS,
             REL_FAILURE,
-            REL_RETRY,
-            REL_VALIDATION_FAILED
+            REL_RETRY
     );
 
-    // Standard PutDatabaseRecord Properties
+    // Properties
     static final PropertyDescriptor RECORD_READER_FACTORY = new Builder()
             .name("put-db-record-record-reader")
             .displayName("Record Reader")
@@ -292,8 +298,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             .name("Column Name Translation Strategy")
             .description("The strategy used to normalize table column name. Column Name will be uppercased to " +
                     "do case-insensitive matching irrespective of strategy")
-            .allowableValues("Remove Underscore", "Lower Case", "Upper Case")
-            .defaultValue("Remove Underscore")
+            .allowableValues(TranslationStrategy.class)
+            .defaultValue(TranslationStrategy.REMOVE_UNDERSCORE)
             .dependsOn(TRANSLATE_FIELD_NAMES, "true")
             .build();
 
@@ -303,7 +309,7 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             .description("Column name will be normalized with this regular expression")
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .addValidator(StandardValidators.REGULAR_EXPRESSION_VALIDATOR)
-            .dependsOn(TRANSLATION_STRATEGY, "Pattern")
+            .dependsOn(TRANSLATION_STRATEGY, TranslationStrategy.PATTERN)
             .build();
 
     static final PropertyDescriptor UNMATCHED_FIELD_BEHAVIOR = new Builder()
@@ -426,90 +432,10 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             .required(false)
             .build();
 
-    static final PropertyDescriptor DB_TYPE = new Builder()
-            .name("Database Type")
-            .displayName("Database Type")
-            .description("The type/flavor of database, used to generate database-specific code. In many cases the Generic type should suffice, but some databases (such as Oracle) have specific quirks that should be accounted for.")
-            .allowableValues("Generic", "Oracle", "PostgreSQL", "MySQL", "SQLServer")
-            .defaultValue("Generic")
-            .required(true)
-            .build();
-    
-    static final PropertyDescriptor DATABASE_DIALECT_SERVICE = new Builder()
-            .name("Database Dialect Service")
-            .displayName("Database Dialect Service")
-            .description("The Database Dialect Service to use for database-specific SQL generation")
-            .required(false)
-            .build();
-
-    // Custom Validation Properties
-    public static final PropertyDescriptor ENABLE_VALIDATION = new Builder()
-            .name("enable-validation")
-            .displayName("Enable Validation")
-            .description("Enable or disable environment validation before executing database operations.")
-            .required(true)
-            .allowableValues("true", "false")
-            .defaultValue("true")
-            .build();
-
-    public static final PropertyDescriptor OPERATION_ID = new Builder()
-            .name("operation-id")
-            .displayName("Operation ID")
-            .description("The operation ID from FlowFile attributes. Used to look up environment configuration " +
-                         "from sse_engine.data_migration_records table.")
-            .required(true)
-            .expressionLanguageSupported(FLOWFILE_ATTRIBUTES)
-            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
-            .defaultValue("${operation.id}")
-            .build();
-
-    public static final PropertyDescriptor ENGINE_DBCP_SERVICE = new Builder()
-            .name("engine-dbcp-service")
-            .displayName("SSE Engine Database Connection Pool")
-            .description("The DBCP Controller Service for connecting to the SSE Engine database " +
-                         "(sse_engine schema) to query environment configurations. " +
-                         "Typically DBCP_NCBA_SSE_ENGINE.")
-            .required(true)
-            .identifiesControllerService(DBCPService.class)
-            .build();
-
-    public static final PropertyDescriptor SOURCE_DBCP_SERVICE = new Builder()
-            .name("source-dbcp-service")
-            .displayName("Source Database Connection Pool")
-            .description("The DBCP Controller Service to validate against the environment's source configuration. " +
-                         "Typically DBCP_NCBA_SSE_SOURCE.")
-            .required(true)
-            .identifiesControllerService(DBCPService.class)
-            .build();
-
-    public static final PropertyDescriptor TARGET_DBCP_SERVICE = new Builder()
-            .name("target-dbcp-service")
-            .displayName("Target Database Connection Pool")
-            .description("The DBCP Controller Service to validate against the environment's target configuration " +
-                         "AND use for the PutDatabaseRecord operation. Typically DBCP_NCBA_SSE_TARGET.")
-            .required(true)
-            .identifiesControllerService(DBCPService.class)
-            .build();
-
-    public static final PropertyDescriptor VALIDATION_MODE = new Builder()
-            .name("validation-mode")
-            .displayName("Validation Mode")
-            .description("Determines validation behavior: STRICT (route to failure on mismatch) or " +
-                         "WARNING (log warning and continue)")
-            .required(true)
-            .defaultValue("STRICT")
-            .allowableValues("STRICT", "WARNING")
-            .build();
+    static final PropertyDescriptor DB_TYPE = DatabaseAdapterDescriptor.getDatabaseTypeDescriptor("db-type");
+    static final PropertyDescriptor DATABASE_DIALECT_SERVICE = DatabaseAdapterDescriptor.getDatabaseDialectServiceDescriptor(DB_TYPE);
 
     protected static final List<PropertyDescriptor> properties = List.of(
-            // Custom validation properties first for visibility
-            ENABLE_VALIDATION,
-            OPERATION_ID,
-            ENGINE_DBCP_SERVICE,
-            SOURCE_DBCP_SERVICE,
-            TARGET_DBCP_SERVICE,
-            VALIDATION_MODE,
-            // Standard PutDatabaseRecord properties
             RECORD_READER_FACTORY,
             DB_TYPE,
             DATABASE_DIALECT_SERVICE,
@@ -541,6 +467,7 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
 
     private Cache<SchemaKey, TableSchema> schemaCache;
 
+    private volatile DatabaseDialectService databaseDialectService;
     private volatile Function<Record, String> recordPathOperationType;
     private volatile RecordPath dataRecordPath;
 
@@ -557,6 +484,31 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     @Override
     protected Collection<ValidationResult> customValidate(ValidationContext validationContext) {
         final Collection<ValidationResult> validationResults = new ArrayList<>(super.customValidate(validationContext));
+
+        final String databaseType = validationContext.getProperty(DB_TYPE).getValue();
+        final DatabaseDialectService dialectService = DatabaseAdapterDescriptor.getDatabaseDialectService(validationContext, DATABASE_DIALECT_SERVICE, databaseType);
+        final Set<StatementType> supportedStatementTypes = dialectService.getSupportedStatementTypes();
+        final String configuredStatementType = validationContext.getProperty(STATEMENT_TYPE).getValue();
+        if (INSERT_IGNORE_TYPE.equals(configuredStatementType)) {
+            if (!supportedStatementTypes.contains(StatementType.INSERT_IGNORE)) {
+                validationResults.add(new ValidationResult.Builder()
+                        .subject(STATEMENT_TYPE.getDisplayName())
+                        .valid(false)
+                        .explanation("INSERT IGNORE not supported with Database Dialect")
+                        .build()
+                );
+            }
+        }
+        if (UPSERT_TYPE.equals(configuredStatementType)) {
+            if (!supportedStatementTypes.contains(StatementType.UPSERT)) {
+                validationResults.add(new ValidationResult.Builder()
+                        .subject(STATEMENT_TYPE.getDisplayName())
+                        .valid(false)
+                        .explanation("UPSERT not supported with Database Dialect")
+                        .build()
+                );
+            }
+        }
 
         final Boolean autoCommit = validationContext.getProperty(AUTO_COMMIT).asBoolean();
         final boolean rollbackOnFailure = validationContext.getProperty(RollbackOnFailure.ROLLBACK_ON_FAILURE).asBoolean();
@@ -596,6 +548,9 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
 
     @OnScheduled
     public void onScheduled(final ProcessContext context) {
+        final String databaseType = context.getProperty(DB_TYPE).getValue();
+        databaseDialectService = DatabaseAdapterDescriptor.getDatabaseDialectService(context, DATABASE_DIALECT_SERVICE, databaseType);
+
         final int tableSchemaCacheSize = context.getProperty(TABLE_SCHEMA_CACHE_SIZE).asInteger();
         schemaCache = Caffeine.newBuilder()
                 .maximumSize(tableSchemaCacheSize)
@@ -614,69 +569,12 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     }
 
     @Override
-    public void migrateProperties(PropertyConfiguration config) {
-        // Migration logic if needed
-    }
-
-    @Override
     public void onTrigger(final ProcessContext context, final ProcessSession session) throws ProcessException {
         FlowFile flowFile = session.get();
         if (flowFile == null) {
             return;
         }
 
-        // Check if validation is enabled
-        boolean validationEnabled = context.getProperty(ENABLE_VALIDATION).asBoolean();
-        
-        if (validationEnabled) {
-            try {
-                ValidationResultEx validationResult = performEnvironmentValidation(context, flowFile);
-                
-                if (!validationResult.valid()) {
-                    String validationMode = context.getProperty(VALIDATION_MODE).getValue();
-                    
-                    if ("STRICT".equals(validationMode)) {
-                        // Add error attributes and route to validation_failed
-                        flowFile = session.putAttribute(flowFile, "validation.passed", "false");
-                        flowFile = session.putAttribute(flowFile, "validation.error", validationResult.errorMessage());
-                        flowFile = session.putAttribute(flowFile, "validation.timestamp", 
-                                                       String.valueOf(System.currentTimeMillis()));
-                        
-                        getLogger().error("Environment validation failed for operation_id={}: {}", 
-                            validationResult.operationId(), validationResult.errorMessage());
-                        
-                        session.transfer(flowFile, REL_VALIDATION_FAILED);
-                        return;
-                    } else {
-                        // WARNING mode - log and continue
-                        getLogger().warn("Environment validation warning for operation_id={}: {} - Proceeding anyway", 
-                            validationResult.operationId(), validationResult.errorMessage());
-                    }
-                } else {
-                    // Validation passed - add success attributes
-                    flowFile = session.putAttribute(flowFile, "validation.passed", "true");
-                    flowFile = session.putAttribute(flowFile, "validation.environment.id", 
-                                                   String.valueOf(validationResult.environmentId()));
-                    flowFile = session.putAttribute(flowFile, "validation.environment.name", 
-                                                   validationResult.environmentName());
-                    flowFile = session.putAttribute(flowFile, "validation.timestamp", 
-                                                   String.valueOf(System.currentTimeMillis()));
-                    
-                    getLogger().info("Environment validation passed for operation_id={}, environment={}", 
-                        validationResult.operationId(), validationResult.environmentName());
-                }
-            } catch (Exception e) {
-                getLogger().error("Error during environment validation: {}", e.getMessage(), e);
-                flowFile = session.putAttribute(flowFile, "validation.error", 
-                                               "Validation error: " + e.getMessage());
-                session.transfer(flowFile, REL_FAILURE);
-                return;
-            }
-        } else {
-            getLogger().warn("Environment validation is DISABLED - proceeding without validation");
-        }
-
-        // Proceed with standard PutDatabaseRecord operation
         final DBCPService dbcpService = context.getProperty(DBCP_SERVICE).asControllerService(DBCPService.class);
 
         Connection connection = null;
@@ -710,288 +608,10 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         }
     }
 
-    // ------------------- Validation Helpers -------------------
-
-    private record ValidationResultEx(boolean valid, String operationId, Long environmentId, String environmentName, String errorMessage) {}
-
-    private record EnvironmentConfig(
-        Long environmentId,
-        String environmentName,
-        String environmentStatus,
-        String sourceDbType,
-        String sourceHost,
-        Integer sourcePort,
-        String sourceDatabase,
-        String sourceName,
-        String targetDbType,
-        String targetHost,
-        Integer targetPort,
-        String targetDatabase,
-        String targetName
-    ) {}
-
-    /**
-     * Performs environment validation by querying SSE Engine database
-     */
-    private ValidationResultEx performEnvironmentValidation(ProcessContext context, FlowFile flowFile) 
-            throws ProcessException {
-        
-        // Extract operation_id from FlowFile attributes
-        String operationId = context.getProperty(OPERATION_ID)
-            .evaluateAttributeExpressions(flowFile)
-            .getValue();
-        
-        if (operationId == null || operationId.trim().isEmpty()) {
-            return new ValidationResultEx(false, operationId, null, null, "operation_id is empty or not set");
-        }
-        
-        getLogger().debug("Validating environment for operation_id: {}", operationId);
-        
-        // Get controller services
-        DBCPService engineDbcp = context.getProperty(ENGINE_DBCP_SERVICE)
-            .asControllerService(DBCPService.class);
-        DBCPService sourceDbcp = context.getProperty(SOURCE_DBCP_SERVICE)
-            .asControllerService(DBCPService.class);
-        DBCPService targetDbcp = context.getProperty(TARGET_DBCP_SERVICE)
-            .asControllerService(DBCPService.class);
-        
-        // Step 1: Query environment configuration from SSE Engine database
-        EnvironmentConfig envConfig;
-        try {
-            envConfig = queryEnvironmentConfig(engineDbcp, operationId);
-        } catch (SQLException e) {
-            return new ValidationResultEx(false, operationId, null, null, 
-                "Failed to query environment configuration: " + e.getMessage());
-        }
-        
-        if (envConfig == null) {
-            return new ValidationResultEx(false, operationId, null, null, 
-                "No environment configuration found for operation_id: " + operationId);
-        }
-        
-        // Step 2: Extract JDBC URLs from controller services
-        String sourceJdbcUrl;
-        String targetJdbcUrl;
-        try {
-            sourceJdbcUrl = extractJdbcUrlFromService(sourceDbcp);
-            targetJdbcUrl = extractJdbcUrlFromService(targetDbcp);
-        } catch (SQLException e) {
-            return new ValidationResultEx(false, operationId, null, null, 
-                "Failed to extract JDBC URLs from controller services: " + e.getMessage());
-        }
-        
-        // Step 3: Build expected JDBC URLs from environment configuration
-        String expectedSourceUrl = buildJdbcUrl(
-            envConfig.sourceDbType(),
-            envConfig.sourceHost(),
-            envConfig.sourcePort(),
-            envConfig.sourceDatabase()
-        );
-        
-        String expectedTargetUrl = buildJdbcUrl(
-            envConfig.targetDbType(),
-            envConfig.targetHost(),
-            envConfig.targetPort(),
-            envConfig.targetDatabase()
-        );
-        
-        getLogger().debug("Expected Source URL: {}", expectedSourceUrl);
-        getLogger().debug("Actual Source URL: {}", sourceJdbcUrl);
-        getLogger().debug("Expected Target URL: {}", expectedTargetUrl);
-        getLogger().debug("Actual Target URL: {}", targetJdbcUrl);
-        
-        // Step 4: Compare URLs
-        boolean sourceMatches = compareJdbcUrls(sourceJdbcUrl, expectedSourceUrl);
-        boolean targetMatches = compareJdbcUrls(targetJdbcUrl, expectedTargetUrl);
-        
-        if (!sourceMatches || !targetMatches) {
-            String errorMsg = String.format(
-                "Controller service mismatch for environment '%s' (ID: %d). " +
-                "Source match: %s, Target match: %s. " +
-                "Expected: Source=%s, Target=%s. " +
-                "Actual: Source=%s, Target=%s",
-                envConfig.environmentName(),
-                envConfig.environmentId(),
-                sourceMatches,
-                targetMatches,
-                expectedSourceUrl,
-                expectedTargetUrl,
-                sourceJdbcUrl,
-                targetJdbcUrl
-            );
-            return new ValidationResultEx(false, operationId, null, null, errorMsg);
-        }
-        
-        return new ValidationResultEx(true, operationId, envConfig.environmentId(), envConfig.environmentName(), null);
+    @Override
+    public void migrateProperties(PropertyConfiguration config) {
+        config.renameProperty(RollbackOnFailure.OLD_ROLLBACK_ON_FAILURE_PROPERTY_NAME, RollbackOnFailure.ROLLBACK_ON_FAILURE.getName());
     }
-
-    /**
-     * Queries environment configuration from SSE Engine database using operation_id
-     */
-    private EnvironmentConfig queryEnvironmentConfig(DBCPService engineDbcp, String operationId) 
-            throws SQLException {
-        
-        Connection conn = null;
-        PreparedStatement stmt = null;
-        ResultSet rs = null;
-        
-        try {
-            conn = engineDbcp.getConnection();
-            
-            // Join query to get complete environment configuration
-            String sql = """
-                SELECT DISTINCT
-                    o.id as operation_id,
-                    o.environment_id,
-                    e.name as environment_name,
-                    e.status as environment_status,
-                    -- Source configuration
-                    sc.id as source_config_id,
-                    sc.database_type as source_db_type,
-                    sc.host as source_host,
-                    sc.port as source_port,
-                    sc.db_name as source_database,
-                    sc.name as source_name,
-                    -- Target configuration
-                    tc.id as target_config_id,
-                    tc.database_type as target_db_type,
-                    tc.host as target_host,
-                    tc.port as target_port,
-                    tc.db_name as target_database,
-                    tc.name as target_name
-                FROM data_migration_records dmr
-                INNER JOIN operations o ON dmr.operation_id = o.id
-                INNER JOIN environment_configurations e ON o.environment_id = e.id
-                INNER JOIN database_configurations sc ON e.source_config_id = sc.id AND sc.deleted = FALSE
-                INNER JOIN database_configurations tc ON e.target_config_id = tc.id AND tc.deleted = FALSE
-                WHERE dmr.operation_id = ?
-                LIMIT 1
-                """;
-            
-            stmt = conn.prepareStatement(sql);
-            stmt.setString(1, operationId);
-            
-            rs = stmt.executeQuery();
-            
-            if (!rs.next()) {
-                getLogger().warn("No environment configuration found for operation_id: {}", operationId);
-                return null;
-            }
-            
-            // Build environment configuration object
-            EnvironmentConfig config = new EnvironmentConfig(
-                rs.getLong("environment_id"),
-                rs.getString("environment_name"),
-                rs.getString("environment_status"),
-                rs.getString("source_db_type"),
-                rs.getString("source_host"),
-                rs.getInt("source_port"),
-                rs.getString("source_database"),
-                rs.getString("source_name"),
-                rs.getString("target_db_type"),
-                rs.getString("target_host"),
-                rs.getInt("target_port"),
-                rs.getString("target_database"),
-                rs.getString("target_name")
-            );
-            
-            getLogger().info("Retrieved environment configuration: {} (ID: {})", 
-                config.environmentName(), config.environmentId());
-            
-            return config;
-            
-        } finally {
-            // Close resources in reverse order
-            if (rs != null) {
-                try { rs.close(); } catch (SQLException e) { 
-                    getLogger().debug("Error closing ResultSet", e); 
-                }
-            }
-            if (stmt != null) {
-                try { stmt.close(); } catch (SQLException e) { 
-                    getLogger().debug("Error closing Statement", e); 
-                }
-            }
-            if (conn != null) {
-                try { conn.close(); } catch (SQLException e) { 
-                    getLogger().debug("Error closing Connection", e); 
-                }
-            }
-        }
-    }
-
-    /**
-     * Extracts JDBC URL from DBCPService controller service
-     */
-    private String extractJdbcUrlFromService(DBCPService dbcpService) throws SQLException {
-        Connection conn = null;
-        try {
-            conn = dbcpService.getConnection();
-            DatabaseMetaData metadata = conn.getMetaData();
-            String url = metadata.getURL();
-            return url;
-        } finally {
-            if (conn != null) {
-                try { 
-                    conn.close(); 
-                } catch (SQLException e) { 
-                    getLogger().debug("Error closing connection", e); 
-                }
-            }
-        }
-    }
-
-    /**
-     * Builds JDBC URL using same logic as EnvironmentConnectionPoolController.java
-     */
-    private String buildJdbcUrl(String dbType, String host, int port, String database) {
-        String baseUrl = switch (dbType.toLowerCase()) {
-            case "oracle" -> "jdbc:oracle:thin:@%s:%d/%s";
-            case "postgresql" -> "jdbc:postgresql://%s:%d/%s";
-            case "mysql" -> "jdbc:mysql://%s:%d/%s";
-            case "sqlserver" -> "jdbc:sqlserver://%s:%d;databaseName=%s";
-            default -> throw new IllegalArgumentException("Unsupported database type: " + dbType);
-        };
-        
-        return String.format(baseUrl, host, port, database);
-    }
-
-    /**
-     * Compares two JDBC URLs for equivalence
-     */
-    private boolean compareJdbcUrls(String url1, String url2) {
-        if (url1 == null || url2 == null) {
-            return false;
-        }
-        
-        String normalized1 = normalizeJdbcUrl(url1);
-        String normalized2 = normalizeJdbcUrl(url2);
-        
-        return normalized1.equalsIgnoreCase(normalized2);
-    }
-
-    /**
-     * Normalizes JDBC URL for comparison
-     */
-    private String normalizeJdbcUrl(String jdbcUrl) {
-        if (jdbcUrl == null) {
-            return "";
-        }
-        
-        // Remove query parameters (everything after ?)
-        int queryIndex = jdbcUrl.indexOf('?');
-        if (queryIndex > 0) {
-            jdbcUrl = jdbcUrl.substring(0, queryIndex);
-        }
-        
-        // Remove trailing slashes
-        jdbcUrl = jdbcUrl.replaceAll("/+$", "");
-        
-        // Normalize whitespace and convert to lowercase
-        return jdbcUrl.trim().toLowerCase();
-    }
-
-    // ------------------- Standard PutDatabaseRecord Methods -------------------
 
     private void routeOnException(final ProcessContext context, final ProcessSession session,
                                   Connection connection, Exception e, FlowFile flowFile) {
@@ -1050,202 +670,6 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             } catch (final Exception closeException) {
                 getLogger().warn("Failed to close database connection", closeException);
             }
-        }
-    }
-
-    private String getJdbcUrl(final Connection connection) {
-        try {
-            DatabaseMetaData databaseMetaData = connection.getMetaData();
-            if (databaseMetaData != null) {
-                return databaseMetaData.getURL();
-            }
-        } catch (final Exception e) {
-            getLogger().warn("Could not determine JDBC URL based on the Driver Connection.", e);
-        }
-
-        return "DBCPService";
-    }
-
-    private void putToDatabase(final ProcessContext context, final ProcessSession session, final FlowFile flowFile, final Connection connection) throws Exception {
-        final String statementType = getStatementType(context, flowFile);
-
-        try (final InputStream in = session.read(flowFile)) {
-            final RecordReaderFactory recordReaderFactory = context.getProperty(RECORD_READER_FACTORY).asControllerService(RecordReaderFactory.class);
-            final RecordReader recordReader = recordReaderFactory.createRecordReader(flowFile, in, getLogger());
-
-            if (SQL_TYPE.equalsIgnoreCase(statementType)) {
-                executeSQL(context, session, flowFile, connection, recordReader);
-            } else {
-                final DMLSettings settings = new DMLSettings(context);
-                executeDML(context, session, flowFile, connection, recordReader, statementType, settings);
-            }
-        }
-    }
-
-    private String getStatementType(final ProcessContext context, final FlowFile flowFile) {
-        // Get the statement type from the attribute if necessary
-        final String statementTypeProperty = context.getProperty(STATEMENT_TYPE).getValue();
-        String statementType = statementTypeProperty;
-        if (USE_ATTR_TYPE.equals(statementTypeProperty)) {
-            statementType = flowFile.getAttribute(STATEMENT_TYPE_ATTRIBUTE);
-        }
-
-        return validateStatementType(statementType, flowFile);
-    }
-
-    private String validateStatementType(final String statementType, final FlowFile flowFile) {
-        if (statementType == null || statementType.isBlank()) {
-            throw new ProcessException("No Statement Type specified for " + flowFile);
-        }
-
-        if (INSERT_TYPE.equalsIgnoreCase(statementType) || UPDATE_TYPE.equalsIgnoreCase(statementType) || DELETE_TYPE.equalsIgnoreCase(statementType)
-                || UPSERT_TYPE.equalsIgnoreCase(statementType) || SQL_TYPE.equalsIgnoreCase(statementType) || USE_RECORD_PATH.equalsIgnoreCase(statementType)
-                || INSERT_IGNORE_TYPE.equalsIgnoreCase(statementType)) {
-
-            return statementType;
-        }
-
-        throw new ProcessException("Invalid Statement Type <" + statementType + "> for " + flowFile);
-    }
-
-    // ------------------- Helper Classes and Methods -------------------
-
-    static class SchemaKey {
-        private final String catalog;
-        private final String schemaName;
-        private final String tableName;
-
-        public SchemaKey(final String catalog, final String schemaName, final String tableName) {
-            this.catalog = catalog;
-            this.schemaName = schemaName;
-            this.tableName = tableName;
-        }
-
-        @Override
-        public int hashCode() {
-            int result = catalog != null ? catalog.hashCode() : 0;
-            result = 31 * result + (schemaName != null ? schemaName.hashCode() : 0);
-            result = 31 * result + tableName.hashCode();
-            return result;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-
-            SchemaKey schemaKey = (SchemaKey) o;
-
-            if (catalog != null ? !catalog.equals(schemaKey.catalog) : schemaKey.catalog != null) return false;
-            if (schemaName != null ? !schemaName.equals(schemaKey.schemaName) : schemaKey.schemaName != null)
-                return false;
-            return tableName.equals(schemaKey.tableName);
-        }
-    }
-
-    static class SqlAndIncludedColumns {
-        private final String sql;
-        private final List<Integer> fieldIndexes;
-
-        public SqlAndIncludedColumns(final String sql, final List<Integer> fieldIndexes) {
-            this.sql = sql;
-            this.fieldIndexes = fieldIndexes;
-        }
-
-        public String getSql() {
-            return sql;
-        }
-
-        public List<Integer> getFieldIndexes() {
-            return fieldIndexes;
-        }
-    }
-
-    static class PreparedSqlAndColumns {
-        private final SqlAndIncludedColumns sqlAndIncludedColumns;
-        private final PreparedStatement preparedStatement;
-        private final int parameterCount;
-
-        public PreparedSqlAndColumns(final SqlAndIncludedColumns sqlAndIncludedColumns, final PreparedStatement preparedStatement, final int parameterCount) {
-            this.sqlAndIncludedColumns = sqlAndIncludedColumns;
-            this.preparedStatement = preparedStatement;
-            this.parameterCount = parameterCount;
-        }
-
-        public SqlAndIncludedColumns getSqlAndIncludedColumns() {
-            return sqlAndIncludedColumns;
-        }
-
-        public PreparedStatement getPreparedStatement() {
-            return preparedStatement;
-        }
-    }
-
-    private static class RecordPathStatementType implements Function<Record, String> {
-        private final RecordPath recordPath;
-
-        public RecordPathStatementType(final RecordPath recordPath) {
-            this.recordPath = recordPath;
-        }
-
-        @Override
-        public String apply(final Record record) {
-            final RecordPathResult recordPathResult = recordPath.evaluate(record);
-            final List<FieldValue> resultList = recordPathResult.getSelectedFields().distinct().toList();
-            if (resultList.isEmpty()) {
-                throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record but got no results");
-            }
-
-            if (resultList.size() > 1) {
-                throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record and received multiple distinct results (" + resultList + ")");
-            }
-
-            final String resultValue = String.valueOf(resultList.getFirst().getValue()).toUpperCase();
-
-            return switch (resultValue) {
-                case INSERT_TYPE, UPDATE_TYPE, DELETE_TYPE, UPSERT_TYPE -> resultValue;
-                case "C", "R" -> INSERT_TYPE;
-                case "U" -> UPDATE_TYPE;
-                case "D" -> DELETE_TYPE;
-                default ->
-                        throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record to determine Statement Type but found invalid value: " + resultValue);
-            };
-        }
-    }
-
-    static class DMLSettings {
-        private final boolean translateFieldNames;
-        private final String translationStrategy;
-        private final Pattern translationPattern;
-        private final boolean ignoreUnmappedFields;
-
-        // Is the unmatched column behaviour fail or warning?
-        private final boolean failUnmappedColumns;
-        private final boolean warningUnmappedColumns;
-
-        // Escape column names?
-        private final boolean escapeColumnNames;
-
-        // Quote table name?
-        private final boolean quoteTableName;
-
-        DMLSettings(ProcessContext context) {
-            translateFieldNames = context.getProperty(TRANSLATE_FIELD_NAMES).asBoolean();
-
-            translationStrategy = translateFieldNames
-                    ? context.getProperty(TRANSLATION_STRATEGY).getValue() : null;
-            translationPattern = "Pattern".equals(translationStrategy)
-                    ? Pattern.compile(context.getProperty(TRANSLATION_PATTERN).getValue()) : null;
-
-            final String unmatchedFieldBehavior = context.getProperty(UNMATCHED_FIELD_BEHAVIOR).getValue();
-            ignoreUnmappedFields = IGNORE_UNMATCHED_FIELD.getValue().equalsIgnoreCase(unmatchedFieldBehavior);
-
-            final String unmatchedColumnBehavior = context.getProperty(UNMATCHED_COLUMN_BEHAVIOR).getValue();
-            failUnmappedColumns = FAIL_UNMATCHED_COLUMN.getValue().equalsIgnoreCase(unmatchedColumnBehavior);
-            warningUnmappedColumns = WARNING_UNMATCHED_COLUMN.getValue().equalsIgnoreCase(unmatchedColumnBehavior);
-
-            escapeColumnNames = context.getProperty(QUOTE_IDENTIFIERS).asBoolean();
-            quoteTableName = context.getProperty(QUOTE_TABLE_IDENTIFIER).asBoolean();
         }
     }
 
@@ -1374,9 +798,9 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         }
         final NameNormalizer normalizer = Optional.of(settings)
                 .filter(s -> s.translateFieldNames)
-                .map(s -> NameNormalizerFactory.getNormalizer(s.translationStrategy, s.translationPattern != null ? s.translationPattern.pattern() : null))
+                .map(s -> NameNormalizerFactory.getNormalizer(s.translationStrategy, s.translationPattern))
                 .orElse(null);
-        final SchemaKey schemaKey = new SchemaKey(catalog, schemaName, tableName);
+        final SchemaKey schemaKey = new PutDatabaseRecord.SchemaKey(catalog, schemaName, tableName);
         final TableSchema tableSchema;
         try {
             tableSchema = schemaCache.get(schemaKey, key -> {
@@ -1433,9 +857,9 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                         } else if (DELETE_TYPE.equalsIgnoreCase(statementType)) {
                             sqlHolder = generateDelete(recordSchema, fqTableName, deleteKeys, tableSchema, settings, normalizer);
                         } else if (UPSERT_TYPE.equalsIgnoreCase(statementType)) {
-                            sqlHolder = generateUpsert(recordSchema, fqTableName, updateKeys, tableSchema, settings, normalizer);
+                            sqlHolder = getSqlStatement(StatementType.UPSERT, recordSchema, fqTableName, updateKeys, tableSchema, settings, normalizer);
                         } else if (INSERT_IGNORE_TYPE.equalsIgnoreCase(statementType)) {
-                            sqlHolder = generateInsertIgnore(recordSchema, fqTableName, tableSchema, settings, normalizer);
+                            sqlHolder = getSqlStatement(StatementType.INSERT_IGNORE, recordSchema, fqTableName, updateKeys, tableSchema, settings, normalizer);
                         } else {
                             throw new IllegalArgumentException(format("Statement Type %s is not valid, FlowFile %s", statementType, flowFile));
                         }
@@ -1717,6 +1141,61 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         return dataRecords;
     }
 
+    private String getJdbcUrl(final Connection connection) {
+        try {
+            DatabaseMetaData databaseMetaData = connection.getMetaData();
+            if (databaseMetaData != null) {
+                return databaseMetaData.getURL();
+            }
+        } catch (final Exception e) {
+            getLogger().warn("Could not determine JDBC URL based on the Driver Connection.", e);
+        }
+
+        return "DBCPService";
+    }
+
+    private String getStatementType(final ProcessContext context, final FlowFile flowFile) {
+        // Get the statement type from the attribute if necessary
+        final String statementTypeProperty = context.getProperty(STATEMENT_TYPE).getValue();
+        String statementType = statementTypeProperty;
+        if (USE_ATTR_TYPE.equals(statementTypeProperty)) {
+            statementType = flowFile.getAttribute(STATEMENT_TYPE_ATTRIBUTE);
+        }
+
+        return validateStatementType(statementType, flowFile);
+    }
+
+    private String validateStatementType(final String statementType, final FlowFile flowFile) {
+        if (statementType == null || statementType.isBlank()) {
+            throw new ProcessException("No Statement Type specified for " + flowFile);
+        }
+
+        if (INSERT_TYPE.equalsIgnoreCase(statementType) || UPDATE_TYPE.equalsIgnoreCase(statementType) || DELETE_TYPE.equalsIgnoreCase(statementType)
+                || UPSERT_TYPE.equalsIgnoreCase(statementType) || SQL_TYPE.equalsIgnoreCase(statementType) || USE_RECORD_PATH.equalsIgnoreCase(statementType)
+                || INSERT_IGNORE_TYPE.equalsIgnoreCase(statementType)) {
+
+            return statementType;
+        }
+
+        throw new ProcessException("Invalid Statement Type <" + statementType + "> for " + flowFile);
+    }
+
+    private void putToDatabase(final ProcessContext context, final ProcessSession session, final FlowFile flowFile, final Connection connection) throws Exception {
+        final String statementType = getStatementType(context, flowFile);
+
+        try (final InputStream in = session.read(flowFile)) {
+            final RecordReaderFactory recordReaderFactory = context.getProperty(RECORD_READER_FACTORY).asControllerService(RecordReaderFactory.class);
+            final RecordReader recordReader = recordReaderFactory.createRecordReader(flowFile, in, getLogger());
+
+            if (SQL_TYPE.equalsIgnoreCase(statementType)) {
+                executeSQL(context, session, flowFile, connection, recordReader);
+            } else {
+                final DMLSettings settings = new DMLSettings(context);
+                executeDML(context, session, flowFile, connection, recordReader, statementType, settings);
+            }
+        }
+    }
+
     String generateTableName(final DMLSettings settings, final String catalog, final String schemaName, final String tableName, final TableSchema tableSchema) {
         final StringBuilder tableNameBuilder = new StringBuilder();
         if (catalog != null) {
@@ -1820,6 +1299,79 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             }
         }
         return new SqlAndIncludedColumns(sqlBuilder.toString(), includedColumns);
+    }
+
+    private SqlAndIncludedColumns getSqlStatement(
+            final StatementType statementType,
+            final RecordSchema recordSchema,
+            final String qualifiedTableName,
+            final String updateKeys,
+            final TableSchema tableSchema,
+            final DMLSettings settings,
+            final NameNormalizer normalizer
+    ) throws MalformedRecordException, SQLDataException, SQLIntegrityConstraintViolationException {
+        checkValuesForRequiredColumns(recordSchema, tableSchema, settings, normalizer);
+
+        final Set<String> keyColumnNames = getUpdateKeyColumnNames(qualifiedTableName, updateKeys, tableSchema);
+        normalizeKeyColumnNamesAndCheckForValues(recordSchema, updateKeys, settings, keyColumnNames, normalizer);
+
+        final List<ColumnDefinition> columnDefinitions = new ArrayList<>();
+        final List<Integer> usedColumnIndices = new ArrayList<>();
+        final List<String> fieldNames = recordSchema.getFieldNames();
+        final int fieldCount = fieldNames.size();
+        for (int i = 0; i < fieldCount; i++) {
+            final RecordField field = recordSchema.getField(i);
+            final String fieldName = field.getFieldName();
+
+            final String columnNameNormalized = TableSchema.normalizedName(fieldName, settings.translateFieldNames, normalizer);
+            final ColumnDescription columnDescription = tableSchema.getColumns().get(columnNameNormalized);
+            if (columnDescription == null) {
+                if (settings.ignoreUnmappedFields) {
+                    continue;
+                } else {
+                    final String tableColumnNames = String.join(",", tableSchema.getColumns().keySet());
+                    final String message = "Record Field [%s] not mapped to Table Columns [%s]".formatted(fieldName, tableColumnNames);
+                    throw new SQLDataException(message);
+                }
+            }
+
+            final String columnName;
+            if (settings.escapeColumnNames) {
+                final String quotedIdentifier = tableSchema.getQuotedIdentifierString();
+                columnName = quotedIdentifier + columnDescription.getColumnName() + quotedIdentifier;
+            } else {
+                columnName = columnDescription.getColumnName();
+            }
+
+            final ColumnDefinition columnDefinition = getColumnDefinition(columnDescription, keyColumnNames, columnName);
+            columnDefinitions.add(columnDefinition);
+
+            usedColumnIndices.add(i);
+        }
+
+        final TableDefinition tableDefinition = new TableDefinition(
+                Optional.empty(),
+                Optional.empty(),
+                qualifiedTableName,
+                columnDefinitions
+        );
+        final StatementRequest statementRequest = new StandardStatementRequest(statementType, tableDefinition);
+        final StatementResponse statementResponse = databaseDialectService.getStatement(statementRequest);
+        final String sql = statementResponse.sql();
+
+        return new SqlAndIncludedColumns(sql, usedColumnIndices);
+    }
+
+    private ColumnDefinition getColumnDefinition(final ColumnDescription columnDescription, final Set<String> keyColumnNames, final String columnName) {
+        final int dataType = columnDescription.getDataType();
+        final boolean primaryKey = keyColumnNames.contains(columnDescription.getColumnName());
+        final StandardColumnDefinition.Nullable nullable = columnDescription.isNullable() ? StandardColumnDefinition.Nullable.YES : StandardColumnDefinition.Nullable.NO;
+        return new StandardColumnDefinition(
+                columnName,
+                dataType,
+                nullable,
+                primaryKey
+        );
     }
 
     SqlAndIncludedColumns generateUpdate(final RecordSchema recordSchema, final String tableName, final String updateKeys,
@@ -2015,22 +1567,6 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         return new SqlAndIncludedColumns(sqlBuilder.toString(), includedColumns);
     }
 
-    SqlAndIncludedColumns generateUpsert(final RecordSchema recordSchema, final String tableName, final String updateKeys,
-                                        final TableSchema tableSchema, final DMLSettings settings, NameNormalizer normalizer)
-            throws IllegalArgumentException, MalformedRecordException, SQLException {
-        // For UPSERT, we'll use a simplified approach - generate INSERT and handle conflicts
-        // This is a basic implementation - in practice, you'd want to use database-specific UPSERT syntax
-        return generateInsert(recordSchema, tableName, tableSchema, settings, normalizer);
-    }
-
-    SqlAndIncludedColumns generateInsertIgnore(final RecordSchema recordSchema, final String tableName, final TableSchema tableSchema,
-                                               final DMLSettings settings, NameNormalizer normalizer)
-            throws IllegalArgumentException, SQLException {
-        // For INSERT_IGNORE, we'll use a simplified approach - generate INSERT
-        // This is a basic implementation - in practice, you'd want to use database-specific INSERT IGNORE syntax
-        return generateInsert(recordSchema, tableName, tableSchema, settings, normalizer);
-    }
-
     private void checkValuesForRequiredColumns(RecordSchema recordSchema, TableSchema tableSchema, DMLSettings settings, NameNormalizer normalizer) {
         final Set<String> normalizedFieldNames = getNormalizedColumnNames(recordSchema, settings.translateFieldNames, normalizer);
 
@@ -2109,5 +1645,154 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             }
         }
         return parameterCount;
+    }
+
+    static class SchemaKey {
+        private final String catalog;
+        private final String schemaName;
+        private final String tableName;
+
+        public SchemaKey(final String catalog, final String schemaName, final String tableName) {
+            this.catalog = catalog;
+            this.schemaName = schemaName;
+            this.tableName = tableName;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = catalog != null ? catalog.hashCode() : 0;
+            result = 31 * result + (schemaName != null ? schemaName.hashCode() : 0);
+            result = 31 * result + tableName.hashCode();
+            return result;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+
+            SchemaKey schemaKey = (SchemaKey) o;
+
+            if (catalog != null ? !catalog.equals(schemaKey.catalog) : schemaKey.catalog != null) return false;
+            if (schemaName != null ? !schemaName.equals(schemaKey.schemaName) : schemaKey.schemaName != null)
+                return false;
+            return tableName.equals(schemaKey.tableName);
+        }
+    }
+
+    /**
+     * A holder class for a SQL prepared statement and a BitSet indicating which columns are being updated (to determine which values from the record to set on the statement)
+     * A value of null for getIncludedColumns indicates that all columns/fields should be included.
+     */
+    static class SqlAndIncludedColumns {
+        private final String sql;
+        private final List<Integer> fieldIndexes;
+
+        /**
+         * Constructor
+         *
+         * @param sql          The prepared SQL statement (including parameters notated by ? )
+         * @param fieldIndexes A List of record indexes. The index of the list is the location of the record field in the SQL prepared statement
+         */
+        public SqlAndIncludedColumns(final String sql, final List<Integer> fieldIndexes) {
+            this.sql = sql;
+            this.fieldIndexes = fieldIndexes;
+        }
+
+        public String getSql() {
+            return sql;
+        }
+
+        public List<Integer> getFieldIndexes() {
+            return fieldIndexes;
+        }
+    }
+
+    static class PreparedSqlAndColumns {
+        private final SqlAndIncludedColumns sqlAndIncludedColumns;
+        private final PreparedStatement preparedStatement;
+        private final int parameterCount;
+
+        public PreparedSqlAndColumns(final SqlAndIncludedColumns sqlAndIncludedColumns, final PreparedStatement preparedStatement, final int parameterCount) {
+            this.sqlAndIncludedColumns = sqlAndIncludedColumns;
+            this.preparedStatement = preparedStatement;
+            this.parameterCount = parameterCount;
+        }
+
+        public SqlAndIncludedColumns getSqlAndIncludedColumns() {
+            return sqlAndIncludedColumns;
+        }
+
+        public PreparedStatement getPreparedStatement() {
+            return preparedStatement;
+        }
+    }
+
+    private static class RecordPathStatementType implements Function<Record, String> {
+        private final RecordPath recordPath;
+
+        public RecordPathStatementType(final RecordPath recordPath) {
+            this.recordPath = recordPath;
+        }
+
+        @Override
+        public String apply(final Record record) {
+            final RecordPathResult recordPathResult = recordPath.evaluate(record);
+            final List<FieldValue> resultList = recordPathResult.getSelectedFields().distinct().toList();
+            if (resultList.isEmpty()) {
+                throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record but got no results");
+            }
+
+            if (resultList.size() > 1) {
+                throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record and received multiple distinct results (" + resultList + ")");
+            }
+
+            final String resultValue = String.valueOf(resultList.getFirst().getValue()).toUpperCase();
+
+            return switch (resultValue) {
+                case INSERT_TYPE, UPDATE_TYPE, DELETE_TYPE, UPSERT_TYPE -> resultValue;
+                case "C", "R" -> INSERT_TYPE;
+                case "U" -> UPDATE_TYPE;
+                case "D" -> DELETE_TYPE;
+                default ->
+                        throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record to determine Statement Type but found invalid value: " + resultValue);
+            };
+        }
+    }
+
+    static class DMLSettings {
+        private final boolean translateFieldNames;
+        private final TranslationStrategy translationStrategy;
+        private final Pattern translationPattern;
+        private final boolean ignoreUnmappedFields;
+
+        // Is the unmatched column behaviour fail or warning?
+        private final boolean failUnmappedColumns;
+        private final boolean warningUnmappedColumns;
+
+        // Escape column names?
+        private final boolean escapeColumnNames;
+
+        // Quote table name?
+        private final boolean quoteTableName;
+
+        DMLSettings(ProcessContext context) {
+            translateFieldNames = context.getProperty(TRANSLATE_FIELD_NAMES).asBoolean();
+
+            translationStrategy = translateFieldNames
+                    ? context.getProperty(TRANSLATION_STRATEGY).asAllowableValue(TranslationStrategy.class) : null;
+            translationPattern = translationStrategy == TranslationStrategy.PATTERN
+                    ? Pattern.compile(context.getProperty(TRANSLATION_PATTERN).getValue()) : null;
+
+            final String unmatchedFieldBehavior = context.getProperty(UNMATCHED_FIELD_BEHAVIOR).getValue();
+            ignoreUnmappedFields = IGNORE_UNMATCHED_FIELD.getValue().equalsIgnoreCase(unmatchedFieldBehavior);
+
+            final String unmatchedColumnBehavior = context.getProperty(UNMATCHED_COLUMN_BEHAVIOR).getValue();
+            failUnmappedColumns = FAIL_UNMATCHED_COLUMN.getValue().equalsIgnoreCase(unmatchedColumnBehavior);
+            warningUnmappedColumns = WARNING_UNMATCHED_COLUMN.getValue().equalsIgnoreCase(unmatchedColumnBehavior);
+
+            escapeColumnNames = context.getProperty(QUOTE_IDENTIFIERS).asBoolean();
+            quoteTableName = context.getProperty(QUOTE_TABLE_IDENTIFIER).asBoolean();
+        }
     }
 }
