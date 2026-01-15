@@ -103,15 +103,16 @@ import static org.apache.nifi.expression.ExpressionLanguageScope.FLOWFILE_ATTRIB
 import static org.apache.nifi.expression.ExpressionLanguageScope.NONE;
 
 @InputRequirement(Requirement.INPUT_REQUIRED)
-@Tags({"sql", "record", "jdbc", "put", "database", "update", "insert", "delete", "validation", "environment", "sensys", "sse"})
+@Tags({ "sql", "record", "jdbc", "put", "database", "update", "insert", "delete", "validation", "environment", "sensys",
+        "sse" })
 @CapabilityDescription("Puts records into a target database with environment validation. " +
-    "Extends the standard PutDatabaseRecord processor to validate that controller services " +
-    "match the expected environment configuration by querying the SSE Engine database " +
-    "using operation_id from FlowFile attributes. Retains all original PutDatabaseRecord functionality.")
+        "Extends the standard PutDatabaseRecord processor to validate that controller services " +
+        "match the expected environment configuration by querying the SSE Engine database " +
+        "using operation_id from FlowFile attributes. Retains all original PutDatabaseRecord functionality.")
 @ReadsAttribute(attribute = "operation.id", description = "Operation ID used to look up environment configuration")
 @WritesAttribute(attribute = "validation.passed", description = "true if validation passed")
 @UseCase(description = "Insert records into a database with environment validation")
-public class ValidatedPutDatabaseRecord extends AbstractProcessor {
+public class SsePutDatabaseRecord extends AbstractProcessor {
 
     // Standard PutDatabaseRecord constants
     public static final String UPDATE_TYPE = "UPDATE";
@@ -119,16 +120,19 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     public static final String DELETE_TYPE = "DELETE";
     public static final String UPSERT_TYPE = "UPSERT";
     public static final String INSERT_IGNORE_TYPE = "INSERT_IGNORE";
-    public static final String SQL_TYPE = "SQL";   // Not an allowable value in the Statement Type property, must be set by attribute
+    public static final String SQL_TYPE = "SQL"; // Not an allowable value in the Statement Type property, must be set
+                                                 // by attribute
     public static final String USE_ATTR_TYPE = "Use statement.type Attribute";
     public static final String USE_RECORD_PATH = "Use Record Path";
 
     static final String STATEMENT_TYPE_ATTRIBUTE = "statement.type";
     static final String PUT_DATABASE_RECORD_ERROR = "putdatabaserecord.error";
 
-    static final AllowableValue IGNORE_UNMATCHED_FIELD = new AllowableValue("Ignore Unmatched Fields", "Ignore Unmatched Fields",
+    static final AllowableValue IGNORE_UNMATCHED_FIELD = new AllowableValue("Ignore Unmatched Fields",
+            "Ignore Unmatched Fields",
             "Any field in the document that cannot be mapped to a column in the database is ignored");
-    static final AllowableValue FAIL_UNMATCHED_FIELD = new AllowableValue("Fail on Unmatched Fields", "Fail on Unmatched Fields",
+    static final AllowableValue FAIL_UNMATCHED_FIELD = new AllowableValue("Fail on Unmatched Fields",
+            "Fail on Unmatched Fields",
             "If the document has any field that cannot be mapped to a column in the database, the FlowFile will be routed to the failure relationship");
     static final AllowableValue IGNORE_UNMATCHED_COLUMN = new AllowableValue("Ignore Unmatched Columns",
             "Ignore Unmatched Columns",
@@ -148,12 +152,14 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
 
     public static final Relationship REL_RETRY = new Relationship.Builder()
             .name("retry")
-            .description("A FlowFile is routed to this relationship if the database cannot be updated but attempting the operation again may succeed")
+            .description(
+                    "A FlowFile is routed to this relationship if the database cannot be updated but attempting the operation again may succeed")
             .build();
     public static final Relationship REL_FAILURE = new Relationship.Builder()
             .name("failure")
-            .description("A FlowFile is routed to this relationship if the database cannot be updated and retrying the operation will also fail, "
-                    + "such as an invalid query or an integrity constraint violation")
+            .description(
+                    "A FlowFile is routed to this relationship if the database cannot be updated and retrying the operation will also fail, "
+                            + "such as an invalid query or an integrity constraint violation")
             .build();
 
     // Additional relationship for validation failures
@@ -166,14 +172,14 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             REL_SUCCESS,
             REL_FAILURE,
             REL_RETRY,
-            REL_VALIDATION_FAILED
-    );
+            REL_VALIDATION_FAILED);
 
     // Standard PutDatabaseRecord Properties
     static final PropertyDescriptor RECORD_READER_FACTORY = new Builder()
             .name("put-db-record-record-reader")
             .displayName("Record Reader")
-            .description("Specifies the Controller Service to use for parsing incoming data and determining the data's schema.")
+            .description(
+                    "Specifies the Controller Service to use for parsing incoming data and determining the data's schema.")
             .identifiesControllerService(RecordReaderFactory.class)
             .required(true)
             .build();
@@ -188,13 +194,15 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                     + "FlowFile. The 'Use statement.type Attribute' option is the only one that allows the 'SQL' statement type. If 'SQL' is specified, the value of the field specified by the "
                     + "'Field Containing SQL' property is expected to be a valid SQL statement on the target database, and will be executed as-is.")
             .required(true)
-            .allowableValues(UPDATE_TYPE, INSERT_TYPE, UPSERT_TYPE, INSERT_IGNORE_TYPE, DELETE_TYPE, USE_ATTR_TYPE, USE_RECORD_PATH)
+            .allowableValues(UPDATE_TYPE, INSERT_TYPE, UPSERT_TYPE, INSERT_IGNORE_TYPE, DELETE_TYPE, USE_ATTR_TYPE,
+                    USE_RECORD_PATH)
             .build();
 
     static final PropertyDescriptor STATEMENT_TYPE_RECORD_PATH = new Builder()
             .name("Statement Type Record Path")
-            .description("Specifies a RecordPath to evaluate against each Record in order to determine the Statement Type. The RecordPath should equate to either INSERT, UPDATE, UPSERT, or DELETE. "
-                    + "(Debezium style operation types are also supported: \"r\" and \"c\" for INSERT, \"u\" for UPDATE, and \"d\" for DELETE)")
+            .description(
+                    "Specifies a RecordPath to evaluate against each Record in order to determine the Statement Type. The RecordPath should equate to either INSERT, UPDATE, UPSERT, or DELETE. "
+                            + "(Debezium style operation types are also supported: \"r\" and \"c\" for INSERT, \"u\" for UPDATE, and \"d\" for DELETE)")
             .required(true)
             .addValidator(new RecordPathValidator())
             .expressionLanguageSupported(NONE)
@@ -203,7 +211,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
 
     static final PropertyDescriptor DATA_RECORD_PATH = new Builder()
             .name("Data Record Path")
-            .description("If specified, this property denotes a RecordPath that will be evaluated against each incoming" +
+            .description("If specified, this property denotes a RecordPath that will be evaluated against each incoming"
+                    +
                     " Record and the Record that results from evaluating the RecordPath will be sent to" +
                     " the database instead of sending the entire incoming Record. If not specified, the entire incoming Record will be published to the database.")
             .required(false)
@@ -214,7 +223,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor DBCP_SERVICE = new Builder()
             .name("put-db-record-dcbp-service")
             .displayName("Database Connection Pooling Service")
-            .description("The Controller Service that is used to obtain a connection to the database for sending records.")
+            .description(
+                    "The Controller Service that is used to obtain a connection to the database for sending records.")
             .required(true)
             .identifiesControllerService(DBCPService.class)
             .build();
@@ -222,11 +232,12 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor CATALOG_NAME = new Builder()
             .name("put-db-record-catalog-name")
             .displayName("Database Name")
-            .description("""
-                    The name of the database (or the name of the catalog, depending on the destination system) that the statement should update. This may not apply
-                    for the database that you are updating. In this case, leave the field empty. Note that if the  property is set and the database is case-sensitive,
-                    the catalog name must match the database's catalog name exactly.
-                    """)
+            .description(
+                    """
+                            The name of the database (or the name of the catalog, depending on the destination system) that the statement should update. This may not apply
+                            for the database that you are updating. In this case, leave the field empty. Note that if the  property is set and the database is case-sensitive,
+                            the catalog name must match the database's catalog name exactly.
+                            """)
             .required(false)
             .expressionLanguageSupported(FLOWFILE_ATTRIBUTES)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
@@ -235,8 +246,9 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor SCHEMA_NAME = new Builder()
             .name("put-db-record-schema-name")
             .displayName("Schema Name")
-            .description("The name of the schema that the table belongs to. This may not apply for the database that you are updating. In this case, leave the field empty. Note that if the "
-                    + "property is set and the database is case-sensitive, the schema name must match the database's schema name exactly.")
+            .description(
+                    "The name of the schema that the table belongs to. This may not apply for the database that you are updating. In this case, leave the field empty. Note that if the "
+                            + "property is set and the database is case-sensitive, the schema name must match the database's schema name exactly.")
             .required(false)
             .expressionLanguageSupported(FLOWFILE_ATTRIBUTES)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
@@ -245,7 +257,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor TABLE_NAME = new Builder()
             .name("put-db-record-table-name")
             .displayName("Table Name")
-            .description("The name of the table that the statement should affect. Note that if the database is case-sensitive, the table name must match the database's table name exactly.")
+            .description(
+                    "The name of the table that the statement should affect. Note that if the database is case-sensitive, the table name must match the database's table name exactly.")
             .required(true)
             .expressionLanguageSupported(FLOWFILE_ATTRIBUTES)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
@@ -254,20 +267,17 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final AllowableValue BINARY_STRING_FORMAT_UTF8 = new AllowableValue(
             "UTF-8",
             "UTF-8",
-            "String values for binary columns contain the original value as text via UTF-8 character encoding"
-    );
+            "String values for binary columns contain the original value as text via UTF-8 character encoding");
 
     static final AllowableValue BINARY_STRING_FORMAT_HEXADECIMAL = new AllowableValue(
             "Hexadecimal",
             "Hexadecimal",
-            "String values for binary columns contain the original value in hexadecimal format"
-    );
+            "String values for binary columns contain the original value in hexadecimal format");
 
     static final AllowableValue BINARY_STRING_FORMAT_BASE64 = new AllowableValue(
             "Base64",
             "Base64",
-            "String values for binary columns contain the original value in Base64 encoded format"
-    );
+            "String values for binary columns contain the original value in Base64 encoded format");
 
     static final PropertyDescriptor BINARY_STRING_FORMAT = new Builder()
             .name("put-db-record-binary-format")
@@ -282,8 +292,9 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor TRANSLATE_FIELD_NAMES = new Builder()
             .name("put-db-record-translate-field-names")
             .displayName("Translate Field Names")
-            .description("If true, the Processor will attempt to translate field names into the appropriate column names for the table specified. "
-                    + "If false, the field names must match the column names exactly, or the column will not be updated")
+            .description(
+                    "If true, the Processor will attempt to translate field names into the appropriate column names for the table specified. "
+                            + "If false, the field names must match the column names exactly, or the column will not be updated")
             .allowableValues("true", "false")
             .defaultValue("true")
             .build();
@@ -309,7 +320,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor UNMATCHED_FIELD_BEHAVIOR = new Builder()
             .name("put-db-record-unmatched-field-behavior")
             .displayName("Unmatched Field Behavior")
-            .description("If an incoming record has a field that does not map to any of the database table's columns, this property specifies how to handle the situation")
+            .description(
+                    "If an incoming record has a field that does not map to any of the database table's columns, this property specifies how to handle the situation")
             .allowableValues(IGNORE_UNMATCHED_FIELD, FAIL_UNMATCHED_FIELD)
             .defaultValue(IGNORE_UNMATCHED_FIELD)
             .build();
@@ -317,7 +329,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor UNMATCHED_COLUMN_BEHAVIOR = new Builder()
             .name("put-db-record-unmatched-column-behavior")
             .displayName("Unmatched Column Behavior")
-            .description("If an incoming record does not have a field mapping for all of the database table's columns, this property specifies how to handle the situation")
+            .description(
+                    "If an incoming record does not have a field mapping for all of the database table's columns, this property specifies how to handle the situation")
             .allowableValues(IGNORE_UNMATCHED_COLUMN, WARNING_UNMATCHED_COLUMN, FAIL_UNMATCHED_COLUMN)
             .defaultValue(FAIL_UNMATCHED_COLUMN)
             .build();
@@ -325,10 +338,11 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor UPDATE_KEYS = new Builder()
             .name("put-db-record-update-keys")
             .displayName("Update Keys")
-            .description("A comma-separated list of column names that uniquely identifies a row in the database for UPDATE statements. "
-                    + "If the Statement Type is UPDATE and this property is not set, the table's Primary Keys are used. "
-                    + "In this case, if no Primary Key exists, the conversion to SQL will fail if Unmatched Column Behaviour is set to FAIL. "
-                    + "This property is ignored if the Statement Type is INSERT")
+            .description(
+                    "A comma-separated list of column names that uniquely identifies a row in the database for UPDATE statements. "
+                            + "If the Statement Type is UPDATE and this property is not set, the table's Primary Keys are used. "
+                            + "In this case, if no Primary Key exists, the conversion to SQL will fail if Unmatched Column Behaviour is set to FAIL. "
+                            + "This property is ignored if the Statement Type is INSERT")
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .required(false)
             .expressionLanguageSupported(FLOWFILE_ATTRIBUTES)
@@ -337,9 +351,10 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
 
     static final PropertyDescriptor DELETE_KEYS = new Builder()
             .name("Delete Keys")
-            .description("A comma-separated list of column names that uniquely identifies a row in the database for DELETE statements. "
-                    + "If the Statement Type is DELETE and this property is not set, the table's columns are used. "
-                    + "This property is ignored if the Statement Type is not DELETE")
+            .description(
+                    "A comma-separated list of column names that uniquely identifies a row in the database for DELETE statements. "
+                            + "If the Statement Type is DELETE and this property is not set, the table's columns are used. "
+                            + "This property is ignored if the Statement Type is not DELETE")
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .required(false)
             .expressionLanguageSupported(FLOWFILE_ATTRIBUTES)
@@ -349,8 +364,9 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor FIELD_CONTAINING_SQL = new Builder()
             .name("put-db-record-field-containing-sql")
             .displayName("Field Containing SQL")
-            .description("If the Statement Type is 'SQL' (as set in the statement.type attribute), this field indicates which field in the record(s) contains the SQL statement to execute. The value "
-                    + "of the field must be a single SQL statement. If the Statement Type is not 'SQL', this field is ignored.")
+            .description(
+                    "If the Statement Type is 'SQL' (as set in the statement.type attribute), this field indicates which field in the record(s) contains the SQL statement to execute. The value "
+                            + "of the field must be a single SQL statement. If the Statement Type is not 'SQL', this field is ignored.")
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .required(false)
             .expressionLanguageSupported(FLOWFILE_ATTRIBUTES)
@@ -360,8 +376,9 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor ALLOW_MULTIPLE_STATEMENTS = new Builder()
             .name("put-db-record-allow-multiple-statements")
             .displayName("Allow Multiple SQL Statements")
-            .description("If the Statement Type is 'SQL' (as set in the statement.type attribute), this field indicates whether to split the field value by a semicolon and execute each statement "
-                    + "separately. If any statement causes an error, the entire set of statements will be rolled back. If the Statement Type is not 'SQL', this field is ignored.")
+            .description(
+                    "If the Statement Type is 'SQL' (as set in the statement.type attribute), this field indicates whether to split the field value by a semicolon and execute each statement "
+                            + "separately. If any statement causes an error, the entire set of statements will be rolled back. If the Statement Type is not 'SQL', this field is ignored.")
             .addValidator(StandardValidators.BOOLEAN_VALIDATOR)
             .required(true)
             .allowableValues("true", "false")
@@ -372,7 +389,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor QUOTE_IDENTIFIERS = new Builder()
             .name("put-db-record-quoted-identifiers")
             .displayName("Quote Column Identifiers")
-            .description("Enabling this option will cause all column names to be quoted, allowing you to use reserved words as column names in your tables.")
+            .description(
+                    "Enabling this option will cause all column names to be quoted, allowing you to use reserved words as column names in your tables.")
             .allowableValues("true", "false")
             .defaultValue("false")
             .build();
@@ -380,7 +398,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor QUOTE_TABLE_IDENTIFIER = new Builder()
             .name("put-db-record-quoted-table-identifiers")
             .displayName("Quote Table Identifiers")
-            .description("Enabling this option will cause the table name to be quoted to support the use of special characters in the table name.")
+            .description(
+                    "Enabling this option will cause the table name to be quoted to support the use of special characters in the table name.")
             .allowableValues("true", "false")
             .defaultValue("false")
             .build();
@@ -408,8 +427,9 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor MAX_BATCH_SIZE = new Builder()
             .name("put-db-record-max-batch-size")
             .displayName("Maximum Batch Size")
-            .description("Specifies maximum number of sql statements to be included in each batch sent to the database. Zero means the batch size is not limited, "
-                    + "and all statements are put into a single batch which can cause high memory usage issues for a very large number of statements.")
+            .description(
+                    "Specifies maximum number of sql statements to be included in each batch sent to the database. Zero means the batch size is not limited, "
+                            + "and all statements are put into a single batch which can cause high memory usage issues for a very large number of statements.")
             .defaultValue("1000")
             .required(false)
             .addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
@@ -419,8 +439,9 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor AUTO_COMMIT = new PropertyDescriptor.Builder()
             .name("database-session-autocommit")
             .displayName("Database Session AutoCommit")
-            .description("The autocommit mode to set on the database connection being used. If set to false, the operation(s) will be explicitly committed or rolled back "
-                    + "(based on success or failure respectively). If set to true, the driver/database automatically handles the commit/rollback.")
+            .description(
+                    "The autocommit mode to set on the database connection being used. If set to false, the operation(s) will be explicitly committed or rolled back "
+                            + "(based on success or failure respectively). If set to true, the driver/database automatically handles the commit/rollback.")
             .allowableValues("true", "false")
             .defaultValue("false")
             .required(false)
@@ -429,12 +450,13 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     static final PropertyDescriptor DB_TYPE = new Builder()
             .name("Database Type")
             .displayName("Database Type")
-            .description("The type/flavor of database, used to generate database-specific code. In many cases the Generic type should suffice, but some databases (such as Oracle) have specific quirks that should be accounted for.")
+            .description(
+                    "The type/flavor of database, used to generate database-specific code. In many cases the Generic type should suffice, but some databases (such as Oracle) have specific quirks that should be accounted for.")
             .allowableValues("Generic", "Oracle", "PostgreSQL", "MySQL", "SQLServer")
             .defaultValue("Generic")
             .required(true)
             .build();
-    
+
     static final PropertyDescriptor DATABASE_DIALECT_SERVICE = new Builder()
             .name("Database Dialect Service")
             .displayName("Database Dialect Service")
@@ -456,7 +478,7 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             .name("operation-id")
             .displayName("Operation ID")
             .description("The operation ID from FlowFile attributes. Used to look up environment configuration " +
-                         "from sse_engine.data_migration_records table.")
+                    "from sse_engine.data_migration_records table.")
             .required(true)
             .expressionLanguageSupported(FLOWFILE_ATTRIBUTES)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
@@ -467,8 +489,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             .name("engine-dbcp-service")
             .displayName("SSE Engine Database Connection Pool")
             .description("The DBCP Controller Service for connecting to the SSE Engine database " +
-                         "(sse_engine schema) to query environment configurations. " +
-                         "Typically DBCP_NCBA_SSE_ENGINE.")
+                    "(sse_engine schema) to query environment configurations. " +
+                    "Typically DBCP_NCBA_SSE_ENGINE.")
             .required(true)
             .identifiesControllerService(DBCPService.class)
             .build();
@@ -477,7 +499,7 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             .name("source-dbcp-service")
             .displayName("Source Database Connection Pool")
             .description("The DBCP Controller Service to validate against the environment's source configuration. " +
-                         "Typically DBCP_NCBA_SSE_SOURCE.")
+                    "Typically DBCP_NCBA_SSE_SOURCE.")
             .required(true)
             .identifiesControllerService(DBCPService.class)
             .build();
@@ -486,7 +508,7 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             .name("target-dbcp-service")
             .displayName("Target Database Connection Pool")
             .description("The DBCP Controller Service to validate against the environment's target configuration " +
-                         "AND use for the PutDatabaseRecord operation. Typically DBCP_NCBA_SSE_TARGET.")
+                    "AND use for the PutDatabaseRecord operation. Typically DBCP_NCBA_SSE_TARGET.")
             .required(true)
             .identifiesControllerService(DBCPService.class)
             .build();
@@ -495,7 +517,7 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             .name("validation-mode")
             .displayName("Validation Mode")
             .description("Determines validation behavior: STRICT (route to failure on mismatch) or " +
-                         "WARNING (log warning and continue)")
+                    "WARNING (log warning and continue)")
             .required(true)
             .defaultValue("STRICT")
             .allowableValues("STRICT", "WARNING")
@@ -536,10 +558,13 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             RollbackOnFailure.ROLLBACK_ON_FAILURE,
             TABLE_SCHEMA_CACHE_SIZE,
             MAX_BATCH_SIZE,
-            AUTO_COMMIT
-    );
+            AUTO_COMMIT);
 
     private Cache<SchemaKey, TableSchema> schemaCache;
+
+    // Caffeine caches for environment validation (persistent across FlowFiles)
+    private Cache<String, EnvironmentConfig> environmentConfigCache;
+    private Cache<String, String> jdbcUrlCache;
 
     private volatile Function<Record, String> recordPathOperationType;
     private volatile RecordPath dataRecordPath;
@@ -559,21 +584,22 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         final Collection<ValidationResult> validationResults = new ArrayList<>(super.customValidate(validationContext));
 
         final Boolean autoCommit = validationContext.getProperty(AUTO_COMMIT).asBoolean();
-        final boolean rollbackOnFailure = validationContext.getProperty(RollbackOnFailure.ROLLBACK_ON_FAILURE).asBoolean();
+        final boolean rollbackOnFailure = validationContext.getProperty(RollbackOnFailure.ROLLBACK_ON_FAILURE)
+                .asBoolean();
         if (autoCommit != null && autoCommit && rollbackOnFailure) {
             validationResults.add(new ValidationResult.Builder()
                     .subject(RollbackOnFailure.ROLLBACK_ON_FAILURE.getDisplayName())
                     .explanation(format("'%s' cannot be set to 'true' when '%s' is also set to 'true'. "
-                                    + "Transaction rollbacks for batch updates cannot rollback all the flow file's statements together "
-                                    + "when auto commit is set to 'true' because the database autocommits each batch separately.",
+                            + "Transaction rollbacks for batch updates cannot rollback all the flow file's statements together "
+                            + "when auto commit is set to 'true' because the database autocommits each batch separately.",
                             RollbackOnFailure.ROLLBACK_ON_FAILURE.getDisplayName(), AUTO_COMMIT.getDisplayName()))
                     .build());
         }
 
         if (autoCommit != null && autoCommit && !isMaxBatchSizeHardcodedToZero(validationContext)) {
             final String explanation = format("'%s' must be hard-coded to zero when '%s' is set to 'true'."
-                            + " Batch size equal to zero executes all statements in a single transaction"
-                            + " which allows rollback to revert all the flow file's statements together if an error occurs.",
+                    + " Batch size equal to zero executes all statements in a single transaction"
+                    + " which allows rollback to revert all the flow file's statements together if an error occurs.",
                     MAX_BATCH_SIZE.getDisplayName(), AUTO_COMMIT.getDisplayName());
 
             validationResults.add(new ValidationResult.Builder()
@@ -599,6 +625,19 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         final int tableSchemaCacheSize = context.getProperty(TABLE_SCHEMA_CACHE_SIZE).asInteger();
         schemaCache = Caffeine.newBuilder()
                 .maximumSize(tableSchemaCacheSize)
+                .build();
+
+        // Initialize environment validation caches
+        // Environment config cache: 5 minute expiry, max 1000 entries
+        this.environmentConfigCache = Caffeine.newBuilder()
+                .expireAfterWrite(5, TimeUnit.MINUTES)
+                .maximumSize(1000)
+                .build();
+
+        // JDBC URL cache: 30 minute expiry, max 100 entries
+        this.jdbcUrlCache = Caffeine.newBuilder()
+                .expireAfterWrite(30, TimeUnit.MINUTES)
+                .maximumSize(100)
                 .build();
 
         if (context.getProperty(STATEMENT_TYPE).getValue().equals(USE_RECORD_PATH)) {
@@ -627,48 +666,48 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
 
         // Check if validation is enabled
         boolean validationEnabled = context.getProperty(ENABLE_VALIDATION).asBoolean();
-        
+
         if (validationEnabled) {
             try {
                 ValidationResultEx validationResult = performEnvironmentValidation(context, flowFile);
-                
+
                 if (!validationResult.valid()) {
                     String validationMode = context.getProperty(VALIDATION_MODE).getValue();
-                    
+
                     if ("STRICT".equals(validationMode)) {
                         // Add error attributes and route to validation_failed
                         flowFile = session.putAttribute(flowFile, "validation.passed", "false");
                         flowFile = session.putAttribute(flowFile, "validation.error", validationResult.errorMessage());
-                        flowFile = session.putAttribute(flowFile, "validation.timestamp", 
-                                                       String.valueOf(System.currentTimeMillis()));
-                        
-                        getLogger().error("Environment validation failed for operation_id={}: {}", 
-                            validationResult.operationId(), validationResult.errorMessage());
-                        
+                        flowFile = session.putAttribute(flowFile, "validation.timestamp",
+                                String.valueOf(System.currentTimeMillis()));
+
+                        getLogger().error("Environment validation failed for operation_id={}: {}",
+                                validationResult.operationId(), validationResult.errorMessage());
+
                         session.transfer(flowFile, REL_VALIDATION_FAILED);
                         return;
                     } else {
                         // WARNING mode - log and continue
-                        getLogger().warn("Environment validation warning for operation_id={}: {} - Proceeding anyway", 
-                            validationResult.operationId(), validationResult.errorMessage());
+                        getLogger().warn("Environment validation warning for operation_id={}: {} - Proceeding anyway",
+                                validationResult.operationId(), validationResult.errorMessage());
                     }
                 } else {
                     // Validation passed - add success attributes
                     flowFile = session.putAttribute(flowFile, "validation.passed", "true");
-                    flowFile = session.putAttribute(flowFile, "validation.environment.id", 
-                                                   String.valueOf(validationResult.environmentId()));
-                    flowFile = session.putAttribute(flowFile, "validation.environment.name", 
-                                                   validationResult.environmentName());
-                    flowFile = session.putAttribute(flowFile, "validation.timestamp", 
-                                                   String.valueOf(System.currentTimeMillis()));
-                    
-                    getLogger().info("Environment validation passed for operation_id={}, environment={}", 
-                        validationResult.operationId(), validationResult.environmentName());
+                    flowFile = session.putAttribute(flowFile, "validation.environment.id",
+                            String.valueOf(validationResult.environmentId()));
+                    flowFile = session.putAttribute(flowFile, "validation.environment.name",
+                            validationResult.environmentName());
+                    flowFile = session.putAttribute(flowFile, "validation.timestamp",
+                            String.valueOf(System.currentTimeMillis()));
+
+                    getLogger().info("Environment validation passed for operation_id={}, environment={}",
+                            validationResult.operationId(), validationResult.environmentName());
                 }
             } catch (Exception e) {
                 getLogger().error("Error during environment validation: {}", e.getMessage(), e);
-                flowFile = session.putAttribute(flowFile, "validation.error", 
-                                               "Validation error: " + e.getMessage());
+                flowFile = session.putAttribute(flowFile, "validation.error",
+                        "Validation error: " + e.getMessage());
                 session.transfer(flowFile, REL_FAILURE);
                 return;
             }
@@ -690,13 +729,15 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                 try {
                     connection.setAutoCommit(propertyAutoCommitValue);
                 } catch (Exception ex) {
-                    getLogger().debug("Failed to setAutoCommit({}) due to {}", propertyAutoCommitValue, ex.getClass().getName(), ex);
+                    getLogger().debug("Failed to setAutoCommit({}) due to {}", propertyAutoCommitValue,
+                            ex.getClass().getName(), ex);
                 }
             }
 
             putToDatabase(context, session, flowFile, connection);
 
-            // If the connection's auto-commit setting is false, then manually commit the transaction
+            // If the connection's auto-commit setting is false, then manually commit the
+            // transaction
             if (!connection.getAutoCommit()) {
                 connection.commit();
             }
@@ -712,63 +753,65 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
 
     // ------------------- Validation Helpers -------------------
 
-    private record ValidationResultEx(boolean valid, String operationId, Long environmentId, String environmentName, String errorMessage) {}
+    private record ValidationResultEx(boolean valid, String operationId, Long environmentId, String environmentName,
+            String errorMessage) {
+    }
 
     private record EnvironmentConfig(
-        Long environmentId,
-        String environmentName,
-        String environmentStatus,
-        String sourceDbType,
-        String sourceHost,
-        Integer sourcePort,
-        String sourceDatabase,
-        String sourceName,
-        String targetDbType,
-        String targetHost,
-        Integer targetPort,
-        String targetDatabase,
-        String targetName
-    ) {}
+            Long environmentId,
+            String environmentName,
+            String environmentStatus,
+            String sourceDbType,
+            String sourceHost,
+            Integer sourcePort,
+            String sourceDatabase,
+            String sourceName,
+            String targetDbType,
+            String targetHost,
+            Integer targetPort,
+            String targetDatabase,
+            String targetName) {
+    }
 
     /**
      * Performs environment validation by querying SSE Engine database
      */
-    private ValidationResultEx performEnvironmentValidation(ProcessContext context, FlowFile flowFile) 
+    private ValidationResultEx performEnvironmentValidation(ProcessContext context, FlowFile flowFile)
             throws ProcessException {
-        
+
         // Extract operation_id from FlowFile attributes
         String operationId = context.getProperty(OPERATION_ID)
-            .evaluateAttributeExpressions(flowFile)
-            .getValue();
-        
+                .evaluateAttributeExpressions(flowFile)
+                .getValue();
+
         if (operationId == null || operationId.trim().isEmpty()) {
             return new ValidationResultEx(false, operationId, null, null, "operation_id is empty or not set");
         }
-        
+
         getLogger().debug("Validating environment for operation_id: {}", operationId);
-        
+
         // Get controller services
         DBCPService engineDbcp = context.getProperty(ENGINE_DBCP_SERVICE)
-            .asControllerService(DBCPService.class);
+                .asControllerService(DBCPService.class);
         DBCPService sourceDbcp = context.getProperty(SOURCE_DBCP_SERVICE)
-            .asControllerService(DBCPService.class);
+                .asControllerService(DBCPService.class);
         DBCPService targetDbcp = context.getProperty(TARGET_DBCP_SERVICE)
-            .asControllerService(DBCPService.class);
-        
+                .asControllerService(DBCPService.class);
+
         // Step 1: Query environment configuration from SSE Engine database
         EnvironmentConfig envConfig;
         try {
             envConfig = queryEnvironmentConfig(engineDbcp, operationId);
         } catch (SQLException e) {
-            return new ValidationResultEx(false, operationId, null, null, 
-                "Failed to query environment configuration: " + e.getMessage());
+            return new ValidationResultEx(false, operationId, null, null,
+                    "Failed to query environment configuration: " + e.getMessage());
         }
-        
+
         if (envConfig == null) {
-            return new ValidationResultEx(false, operationId, null, null, 
-                "No environment configuration found for operation_id: " + operationId);
+            return new ValidationResultEx(false, operationId, null, null,
+                    "No environment configuration found for operation_id: " + operationId);
         }
-        
+
         // Step 2: Extract JDBC URLs from controller services
         String sourceJdbcUrl;
         String targetJdbcUrl;
@@ -776,145 +819,159 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             sourceJdbcUrl = extractJdbcUrlFromService(sourceDbcp);
             targetJdbcUrl = extractJdbcUrlFromService(targetDbcp);
         } catch (SQLException e) {
-            return new ValidationResultEx(false, operationId, null, null, 
-                "Failed to extract JDBC URLs from controller services: " + e.getMessage());
+            return new ValidationResultEx(false, operationId, null, null,
+                    "Failed to extract JDBC URLs from controller services: " + e.getMessage());
         }
-        
+
         // Step 3: Build expected JDBC URLs from environment configuration
         String expectedSourceUrl = buildJdbcUrl(
-            envConfig.sourceDbType(),
-            envConfig.sourceHost(),
-            envConfig.sourcePort(),
-            envConfig.sourceDatabase()
-        );
-        
+                envConfig.sourceDbType(),
+                envConfig.sourceHost(),
+                envConfig.sourcePort(),
+                envConfig.sourceDatabase());
+
         String expectedTargetUrl = buildJdbcUrl(
-            envConfig.targetDbType(),
-            envConfig.targetHost(),
-            envConfig.targetPort(),
-            envConfig.targetDatabase()
-        );
-        
+                envConfig.targetDbType(),
+                envConfig.targetHost(),
+                envConfig.targetPort(),
+                envConfig.targetDatabase());
+
         getLogger().debug("Expected Source URL: {}", expectedSourceUrl);
         getLogger().debug("Actual Source URL: {}", sourceJdbcUrl);
         getLogger().debug("Expected Target URL: {}", expectedTargetUrl);
         getLogger().debug("Actual Target URL: {}", targetJdbcUrl);
-        
+
         // Step 4: Compare URLs
         boolean sourceMatches = compareJdbcUrls(sourceJdbcUrl, expectedSourceUrl);
         boolean targetMatches = compareJdbcUrls(targetJdbcUrl, expectedTargetUrl);
-        
+
         if (!sourceMatches || !targetMatches) {
             String errorMsg = String.format(
-                "Controller service mismatch for environment '%s' (ID: %d). " +
-                "Source match: %s, Target match: %s. " +
-                "Expected: Source=%s, Target=%s. " +
-                "Actual: Source=%s, Target=%s",
-                envConfig.environmentName(),
-                envConfig.environmentId(),
-                sourceMatches,
-                targetMatches,
-                expectedSourceUrl,
-                expectedTargetUrl,
-                sourceJdbcUrl,
-                targetJdbcUrl
-            );
+                    "Controller service mismatch for environment '%s' (ID: %d). " +
+                            "Source match: %s, Target match: %s. " +
+                            "Expected: Source=%s, Target=%s. " +
+                            "Actual: Source=%s, Target=%s",
+                    envConfig.environmentName(),
+                    envConfig.environmentId(),
+                    sourceMatches,
+                    targetMatches,
+                    expectedSourceUrl,
+                    expectedTargetUrl,
+                    sourceJdbcUrl,
+                    targetJdbcUrl);
             return new ValidationResultEx(false, operationId, null, null, errorMsg);
         }
-        
+
         return new ValidationResultEx(true, operationId, envConfig.environmentId(), envConfig.environmentName(), null);
     }
 
     /**
      * Queries environment configuration from SSE Engine database using operation_id
      */
-    private EnvironmentConfig queryEnvironmentConfig(DBCPService engineDbcp, String operationId) 
+    private EnvironmentConfig queryEnvironmentConfig(DBCPService engineDbcp, String operationId)
             throws SQLException {
-        
+
+        // Check Caffeine cache first
+        EnvironmentConfig cachedConfig = environmentConfigCache.getIfPresent(operationId);
+        if (cachedConfig != null) {
+            getLogger().debug("Environment config cache HIT for operation_id: {}", operationId);
+            return cachedConfig;
+        }
+
+        getLogger().debug("Environment config cache MISS - querying database for operation_id: {}", operationId);
+
         Connection conn = null;
         PreparedStatement stmt = null;
         ResultSet rs = null;
-        
+
         try {
             conn = engineDbcp.getConnection();
-            
+
             // Join query to get complete environment configuration
             String sql = """
-                SELECT DISTINCT
-                    o.id as operation_id,
-                    o.environment_id,
-                    e.name as environment_name,
-                    e.status as environment_status,
-                    -- Source configuration
-                    sc.id as source_config_id,
-                    sc.database_type as source_db_type,
-                    sc.host as source_host,
-                    sc.port as source_port,
-                    sc.db_name as source_database,
-                    sc.name as source_name,
-                    -- Target configuration
-                    tc.id as target_config_id,
-                    tc.database_type as target_db_type,
-                    tc.host as target_host,
-                    tc.port as target_port,
-                    tc.db_name as target_database,
-                    tc.name as target_name
-                FROM data_migration_records dmr
-                INNER JOIN operations o ON dmr.operation_id = o.id
-                INNER JOIN environment_configurations e ON o.environment_id = e.id
-                INNER JOIN database_configurations sc ON e.source_config_id = sc.id AND sc.deleted = FALSE
-                INNER JOIN database_configurations tc ON e.target_config_id = tc.id AND tc.deleted = FALSE
-                WHERE dmr.operation_id = ?
-                LIMIT 1
-                """;
-            
+                    SELECT DISTINCT
+                        o.id as operation_id,
+                        o.environment_id,
+                        e.name as environment_name,
+                        e.status as environment_status,
+                        -- Source configuration
+                        sc.id as source_config_id,
+                        sc.database_type as source_db_type,
+                        sc.host as source_host,
+                        sc.port as source_port,
+                        sc.db_name as source_database,
+                        sc.name as source_name,
+                        -- Target configuration
+                        tc.id as target_config_id,
+                        tc.database_type as target_db_type,
+                        tc.host as target_host,
+                        tc.port as target_port,
+                        tc.db_name as target_database,
+                        tc.name as target_name
+                    FROM data_migration_records dmr
+                    INNER JOIN operations o ON dmr.operation_id = o.id
+                    INNER JOIN environment_configurations e ON o.environment_id = e.id
+                    INNER JOIN database_configurations sc ON e.source_config_id = sc.id AND sc.deleted = FALSE
+                    INNER JOIN database_configurations tc ON e.target_config_id = tc.id AND tc.deleted = FALSE
+                    WHERE dmr.operation_id = ?
+                    LIMIT 1
+                    """;
+
             stmt = conn.prepareStatement(sql);
             stmt.setString(1, operationId);
-            
+
             rs = stmt.executeQuery();
-            
+
             if (!rs.next()) {
                 getLogger().warn("No environment configuration found for operation_id: {}", operationId);
                 return null;
             }
-            
+
             // Build environment configuration object
             EnvironmentConfig config = new EnvironmentConfig(
-                rs.getLong("environment_id"),
-                rs.getString("environment_name"),
-                rs.getString("environment_status"),
-                rs.getString("source_db_type"),
-                rs.getString("source_host"),
-                rs.getInt("source_port"),
-                rs.getString("source_database"),
-                rs.getString("source_name"),
-                rs.getString("target_db_type"),
-                rs.getString("target_host"),
-                rs.getInt("target_port"),
-                rs.getString("target_database"),
-                rs.getString("target_name")
-            );
-            
-            getLogger().info("Retrieved environment configuration: {} (ID: {})", 
-                config.environmentName(), config.environmentId());
-            
+                    rs.getLong("environment_id"),
+                    rs.getString("environment_name"),
+                    rs.getString("environment_status"),
+                    rs.getString("source_db_type"),
+                    rs.getString("source_host"),
+                    rs.getInt("source_port"),
+                    rs.getString("source_database"),
+                    rs.getString("source_name"),
+                    rs.getString("target_db_type"),
+                    rs.getString("target_host"),
+                    rs.getInt("target_port"),
+                    rs.getString("target_database"),
+                    rs.getString("target_name"));
+
+            // Store in Caffeine cache for future use
+            environmentConfigCache.put(operationId, config);
+
+            getLogger().info("Retrieved environment configuration: {} (ID: {})",
+                    config.environmentName(), config.environmentId());
+
             return config;
-            
+
         } finally {
             // Close resources in reverse order
             if (rs != null) {
-                try { rs.close(); } catch (SQLException e) { 
-                    getLogger().debug("Error closing ResultSet", e); 
+                try {
+                    rs.close();
+                } catch (SQLException e) {
+                    getLogger().debug("Error closing ResultSet", e);
                 }
             }
             if (stmt != null) {
-                try { stmt.close(); } catch (SQLException e) { 
-                    getLogger().debug("Error closing Statement", e); 
+                try {
+                    stmt.close();
+                } catch (SQLException e) {
+                    getLogger().debug("Error closing Statement", e);
                 }
             }
             if (conn != null) {
-                try { conn.close(); } catch (SQLException e) { 
-                    getLogger().debug("Error closing Connection", e); 
+                try {
+                    conn.close();
+                } catch (SQLException e) {
+                    getLogger().debug("Error closing Connection", e);
                 }
             }
         }
@@ -924,18 +981,34 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
      * Extracts JDBC URL from DBCPService controller service
      */
     private String extractJdbcUrlFromService(DBCPService dbcpService) throws SQLException {
+        // Create cache key using service identifier
+        String cacheKey = dbcpService.getIdentifier();
+
+        // Check Caffeine cache first
+        String cachedUrl = jdbcUrlCache.getIfPresent(cacheKey);
+        if (cachedUrl != null) {
+            getLogger().debug("JDBC URL cache HIT for service: {}", cacheKey);
+            return cachedUrl;
+        }
+
+        getLogger().debug("JDBC URL cache MISS - extracting from service: {}", cacheKey);
+
         Connection conn = null;
         try {
             conn = dbcpService.getConnection();
             DatabaseMetaData metadata = conn.getMetaData();
             String url = metadata.getURL();
+
+            // Store in Caffeine cache for future use
+            jdbcUrlCache.put(cacheKey, url);
+
             return url;
         } finally {
             if (conn != null) {
-                try { 
-                    conn.close(); 
-                } catch (SQLException e) { 
-                    getLogger().debug("Error closing connection", e); 
+                try {
+                    conn.close();
+                } catch (SQLException e) {
+                    getLogger().debug("Error closing connection", e);
                 }
             }
         }
@@ -952,7 +1025,7 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             case "sqlserver" -> "jdbc:sqlserver://%s:%d;databaseName=%s";
             default -> throw new IllegalArgumentException("Unsupported database type: " + dbType);
         };
-        
+
         return String.format(baseUrl, host, port, database);
     }
 
@@ -963,10 +1036,10 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         if (url1 == null || url2 == null) {
             return false;
         }
-        
+
         String normalized1 = normalizeJdbcUrl(url1);
         String normalized2 = normalizeJdbcUrl(url2);
-        
+
         return normalized1.equalsIgnoreCase(normalized2);
     }
 
@@ -977,16 +1050,16 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         if (jdbcUrl == null) {
             return "";
         }
-        
+
         // Remove query parameters (everything after ?)
         int queryIndex = jdbcUrl.indexOf('?');
         if (queryIndex > 0) {
             jdbcUrl = jdbcUrl.substring(0, queryIndex);
         }
-        
+
         // Remove trailing slashes
         jdbcUrl = jdbcUrl.replaceAll("/+$", "");
-        
+
         // Normalize whitespace and convert to lowercase
         return jdbcUrl.trim().toLowerCase();
     }
@@ -994,11 +1067,14 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     // ------------------- Standard PutDatabaseRecord Methods -------------------
 
     private void routeOnException(final ProcessContext context, final ProcessSession session,
-                                  Connection connection, Exception e, FlowFile flowFile) {
-        // When an Exception is thrown, we want to route to 'retry' if we expect that attempting the same request again
-        // might work. Otherwise, route to failure. SQLTransientException is a specific type that indicates that a retry may work.
+            Connection connection, Exception e, FlowFile flowFile) {
+        // When an Exception is thrown, we want to route to 'retry' if we expect that
+        // attempting the same request again
+        // might work. Otherwise, route to failure. SQLTransientException is a specific
+        // type that indicates that a retry may work.
         final Relationship relationship;
-        final Throwable toAnalyze = (e instanceof BatchUpdateException || e instanceof ProcessException) ? e.getCause() : e;
+        final Throwable toAnalyze = (e instanceof BatchUpdateException || e instanceof ProcessException) ? e.getCause()
+                : e;
         if (toAnalyze instanceof SQLTransientException) {
             relationship = REL_RETRY;
             flowFile = session.penalize(flowFile);
@@ -1008,12 +1084,15 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
 
         final boolean rollbackOnFailure = context.getProperty(RollbackOnFailure.ROLLBACK_ON_FAILURE).asBoolean();
         if (rollbackOnFailure) {
-            getLogger().error("Failed to put Records to database for {}. Rolling back NiFi session and returning the flow file to its incoming queue.", flowFile, e);
+            getLogger().error(
+                    "Failed to put Records to database for {}. Rolling back NiFi session and returning the flow file to its incoming queue.",
+                    flowFile, e);
             session.rollback();
             context.yield();
         } else {
             getLogger().error("Failed to put Records to database for {}. Routing to {}.", flowFile, relationship, e);
-            flowFile = session.putAttribute(flowFile, PUT_DATABASE_RECORD_ERROR, (e.getMessage() == null ? "Unknown" : e.getMessage()));
+            flowFile = session.putAttribute(flowFile, PUT_DATABASE_RECORD_ERROR,
+                    (e.getMessage() == null ? "Unknown" : e.getMessage()));
             session.transfer(flowFile, relationship);
         }
 
@@ -1040,7 +1119,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                     connection.setAutoCommit(originalAutoCommit);
                 }
             } catch (final Exception autoCommitException) {
-                getLogger().warn("Failed to set auto-commit back to {} on connection", originalAutoCommit, autoCommitException);
+                getLogger().warn("Failed to set auto-commit back to {} on connection", originalAutoCommit,
+                        autoCommitException);
             }
 
             try {
@@ -1066,11 +1146,13 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         return "DBCPService";
     }
 
-    private void putToDatabase(final ProcessContext context, final ProcessSession session, final FlowFile flowFile, final Connection connection) throws Exception {
+    private void putToDatabase(final ProcessContext context, final ProcessSession session, final FlowFile flowFile,
+            final Connection connection) throws Exception {
         final String statementType = getStatementType(context, flowFile);
 
         try (final InputStream in = session.read(flowFile)) {
-            final RecordReaderFactory recordReaderFactory = context.getProperty(RECORD_READER_FACTORY).asControllerService(RecordReaderFactory.class);
+            final RecordReaderFactory recordReaderFactory = context.getProperty(RECORD_READER_FACTORY)
+                    .asControllerService(RecordReaderFactory.class);
             final RecordReader recordReader = recordReaderFactory.createRecordReader(flowFile, in, getLogger());
 
             if (SQL_TYPE.equalsIgnoreCase(statementType)) {
@@ -1098,8 +1180,10 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             throw new ProcessException("No Statement Type specified for " + flowFile);
         }
 
-        if (INSERT_TYPE.equalsIgnoreCase(statementType) || UPDATE_TYPE.equalsIgnoreCase(statementType) || DELETE_TYPE.equalsIgnoreCase(statementType)
-                || UPSERT_TYPE.equalsIgnoreCase(statementType) || SQL_TYPE.equalsIgnoreCase(statementType) || USE_RECORD_PATH.equalsIgnoreCase(statementType)
+        if (INSERT_TYPE.equalsIgnoreCase(statementType) || UPDATE_TYPE.equalsIgnoreCase(statementType)
+                || DELETE_TYPE.equalsIgnoreCase(statementType)
+                || UPSERT_TYPE.equalsIgnoreCase(statementType) || SQL_TYPE.equalsIgnoreCase(statementType)
+                || USE_RECORD_PATH.equalsIgnoreCase(statementType)
                 || INSERT_IGNORE_TYPE.equalsIgnoreCase(statementType)) {
 
             return statementType;
@@ -1131,12 +1215,15 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
 
         @Override
         public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
+            if (this == o)
+                return true;
+            if (o == null || getClass() != o.getClass())
+                return false;
 
             SchemaKey schemaKey = (SchemaKey) o;
 
-            if (catalog != null ? !catalog.equals(schemaKey.catalog) : schemaKey.catalog != null) return false;
+            if (catalog != null ? !catalog.equals(schemaKey.catalog) : schemaKey.catalog != null)
+                return false;
             if (schemaName != null ? !schemaName.equals(schemaKey.schemaName) : schemaKey.schemaName != null)
                 return false;
             return tableName.equals(schemaKey.tableName);
@@ -1166,7 +1253,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         private final PreparedStatement preparedStatement;
         private final int parameterCount;
 
-        public PreparedSqlAndColumns(final SqlAndIncludedColumns sqlAndIncludedColumns, final PreparedStatement preparedStatement, final int parameterCount) {
+        public PreparedSqlAndColumns(final SqlAndIncludedColumns sqlAndIncludedColumns,
+                final PreparedStatement preparedStatement, final int parameterCount) {
             this.sqlAndIncludedColumns = sqlAndIncludedColumns;
             this.preparedStatement = preparedStatement;
             this.parameterCount = parameterCount;
@@ -1193,11 +1281,13 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             final RecordPathResult recordPathResult = recordPath.evaluate(record);
             final List<FieldValue> resultList = recordPathResult.getSelectedFields().distinct().toList();
             if (resultList.isEmpty()) {
-                throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record but got no results");
+                throw new ProcessException(
+                        "Evaluated RecordPath " + recordPath.getPath() + " against Record but got no results");
             }
 
             if (resultList.size() > 1) {
-                throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record and received multiple distinct results (" + resultList + ")");
+                throw new ProcessException("Evaluated RecordPath " + recordPath.getPath()
+                        + " against Record and received multiple distinct results (" + resultList + ")");
             }
 
             final String resultValue = String.valueOf(resultList.getFirst().getValue()).toUpperCase();
@@ -1208,7 +1298,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                 case "U" -> UPDATE_TYPE;
                 case "D" -> DELETE_TYPE;
                 default ->
-                        throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record to determine Statement Type but found invalid value: " + resultValue);
+                    throw new ProcessException("Evaluated RecordPath " + recordPath.getPath()
+                            + " against Record to determine Statement Type but found invalid value: " + resultValue);
             };
         }
     }
@@ -1233,9 +1324,11 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             translateFieldNames = context.getProperty(TRANSLATE_FIELD_NAMES).asBoolean();
 
             translationStrategy = translateFieldNames
-                    ? context.getProperty(TRANSLATION_STRATEGY).getValue() : null;
+                    ? context.getProperty(TRANSLATION_STRATEGY).getValue()
+                    : null;
             translationPattern = "Pattern".equals(translationStrategy)
-                    ? Pattern.compile(context.getProperty(TRANSLATION_PATTERN).getValue()) : null;
+                    ? Pattern.compile(context.getProperty(TRANSLATION_PATTERN).getValue())
+                    : null;
 
             final String unmatchedFieldBehavior = context.getProperty(UNMATCHED_FIELD_BEHAVIOR).getValue();
             ignoreUnmappedFields = IGNORE_UNMATCHED_FIELD.getValue().equalsIgnoreCase(unmatchedFieldBehavior);
@@ -1250,37 +1343,46 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
     }
 
     private void executeSQL(final ProcessContext context, final ProcessSession session, final FlowFile flowFile,
-                            final Connection connection, final RecordReader recordReader)
+            final Connection connection, final RecordReader recordReader)
             throws IllegalArgumentException, MalformedRecordException, IOException, SQLException {
 
         final RecordSchema recordSchema = recordReader.getSchema();
 
         // Find which field has the SQL statement in it
-        final String sqlField = context.getProperty(FIELD_CONTAINING_SQL).evaluateAttributeExpressions(flowFile).getValue();
+        final String sqlField = context.getProperty(FIELD_CONTAINING_SQL).evaluateAttributeExpressions(flowFile)
+                .getValue();
         if (StringUtils.isEmpty(sqlField)) {
-            throw new IllegalArgumentException(format("SQL specified as Statement Type but no Field Containing SQL was found, FlowFile %s", flowFile));
+            throw new IllegalArgumentException(format(
+                    "SQL specified as Statement Type but no Field Containing SQL was found, FlowFile %s", flowFile));
         }
 
-        boolean schemaHasSqlField = recordSchema.getFields().stream().anyMatch((field) -> sqlField.equals(field.getFieldName()));
+        boolean schemaHasSqlField = recordSchema.getFields().stream()
+                .anyMatch((field) -> sqlField.equals(field.getFieldName()));
         if (!schemaHasSqlField) {
-            throw new IllegalArgumentException(format("Record schema does not contain Field Containing SQL: %s, FlowFile %s", sqlField, flowFile));
+            throw new IllegalArgumentException(
+                    format("Record schema does not contain Field Containing SQL: %s, FlowFile %s", sqlField, flowFile));
         }
 
         try (final Statement statement = connection.createStatement()) {
-            final int timeoutMillis = context.getProperty(QUERY_TIMEOUT).evaluateAttributeExpressions().asTimePeriod(TimeUnit.MILLISECONDS).intValue();
+            final int timeoutMillis = context.getProperty(QUERY_TIMEOUT).evaluateAttributeExpressions()
+                    .asTimePeriod(TimeUnit.MILLISECONDS).intValue();
             try {
                 statement.setQueryTimeout(timeoutMillis); // timeout in seconds
             } catch (SQLException se) {
-                // If the driver doesn't support query timeout, then assume it is "infinite". Allow a timeout of zero only
+                // If the driver doesn't support query timeout, then assume it is "infinite".
+                // Allow a timeout of zero only
                 if (timeoutMillis > 0) {
                     throw se;
                 }
             }
 
             final ComponentLog log = getLogger();
-            final int maxBatchSize = context.getProperty(MAX_BATCH_SIZE).evaluateAttributeExpressions(flowFile).asInteger();
-            // Batch Size 0 means put all sql statements into one batch update no matter how many statements there are.
-            // Do not use batch statements if batch size is equal to 1 because that is the same as not using batching.
+            final int maxBatchSize = context.getProperty(MAX_BATCH_SIZE).evaluateAttributeExpressions(flowFile)
+                    .asInteger();
+            // Batch Size 0 means put all sql statements into one batch update no matter how
+            // many statements there are.
+            // Do not use batch statements if batch size is equal to 1 because that is the
+            // same as not using batching.
             // Also do not use batches if the connection does not support batching.
             boolean useBatch = maxBatchSize != 1 && isSupportsBatchUpdates(connection);
             int currentBatchSize = 0;
@@ -1294,7 +1396,9 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                 nextRecord = recordReader.nextRecord();
 
                 if (sql == null || StringUtils.isEmpty(sql)) {
-                    throw new MalformedRecordException(format("Record had no (or null) value for Field Containing SQL: %s, FlowFile %s", sqlField, flowFile));
+                    throw new MalformedRecordException(
+                            format("Record had no (or null) value for Field Containing SQL: %s, FlowFile %s", sqlField,
+                                    flowFile));
                 }
 
                 final String[] sqlStatements;
@@ -1302,7 +1406,7 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                     final String regex = "(?<!\\\\);";
                     sqlStatements = (sql).split(regex);
                 } else {
-                    sqlStatements = new String[]{sql};
+                    sqlStatements = new String[] { sql };
                 }
 
                 if (isFirstRecord) {
@@ -1324,7 +1428,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
 
                 if (useBatch && maxBatchSize > 0 && currentBatchSize >= maxBatchSize) {
                     batchIndex++;
-                    log.debug("Executing batch with last query {} because batch reached max size %s for {}; batch index: {}; batch size: {}",
+                    log.debug(
+                            "Executing batch with last query {} because batch reached max size %s for {}; batch index: {}; batch size: {}",
                             sql, maxBatchSize, flowFile, batchIndex, currentBatchSize);
                     statement.executeBatch();
                     session.adjustCounter("Batches Executed", 1, false);
@@ -1342,9 +1447,9 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         }
     }
 
-
     private void executeDML(final ProcessContext context, final ProcessSession session, final FlowFile flowFile,
-                            final Connection con, final RecordReader recordReader, final String explicitStatementType, final DMLSettings settings)
+            final Connection con, final RecordReader recordReader, final String explicitStatementType,
+            final DMLSettings settings)
             throws IllegalArgumentException, MalformedRecordException, IOException, SQLException {
 
         final ComponentLog log = getLogger();
@@ -1355,33 +1460,39 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         final String tableName = context.getProperty(TABLE_NAME).evaluateAttributeExpressions(flowFile).getValue();
         final String updateKeys = switch (configuredStatementType) {
             case UPDATE_TYPE, UPSERT_TYPE, SQL_TYPE, USE_ATTR_TYPE, USE_RECORD_PATH ->
-                    context.getProperty(UPDATE_KEYS).evaluateAttributeExpressions(flowFile).getValue();
+                context.getProperty(UPDATE_KEYS).evaluateAttributeExpressions(flowFile).getValue();
             default -> null;
         };
         final String deleteKeys = switch (configuredStatementType) {
             case DELETE_TYPE, SQL_TYPE, USE_ATTR_TYPE, USE_RECORD_PATH ->
-                    context.getProperty(DELETE_KEYS).evaluateAttributeExpressions(flowFile).getValue();
+                context.getProperty(DELETE_KEYS).evaluateAttributeExpressions(flowFile).getValue();
             default -> null;
         };
         final int maxBatchSize = context.getProperty(MAX_BATCH_SIZE).evaluateAttributeExpressions(flowFile).asInteger();
-        final int timeoutMillis = context.getProperty(QUERY_TIMEOUT).evaluateAttributeExpressions().asTimePeriod(TimeUnit.MILLISECONDS).intValue();
+        final int timeoutMillis = context.getProperty(QUERY_TIMEOUT).evaluateAttributeExpressions()
+                .asTimePeriod(TimeUnit.MILLISECONDS).intValue();
 
-        final String binaryStringFormat = context.getProperty(BINARY_STRING_FORMAT).evaluateAttributeExpressions(flowFile).getValue();
+        final String binaryStringFormat = context.getProperty(BINARY_STRING_FORMAT)
+                .evaluateAttributeExpressions(flowFile).getValue();
 
-        // Ensure the table name has been set, the generated SQL statements (and TableSchema cache) will need it
+        // Ensure the table name has been set, the generated SQL statements (and
+        // TableSchema cache) will need it
         if (StringUtils.isEmpty(tableName)) {
-            throw new IllegalArgumentException(format("Cannot process %s because Table Name is null or empty", flowFile));
+            throw new IllegalArgumentException(
+                    format("Cannot process %s because Table Name is null or empty", flowFile));
         }
         final NameNormalizer normalizer = Optional.of(settings)
                 .filter(s -> s.translateFieldNames)
-                .map(s -> NameNormalizerFactory.getNormalizer(s.translationStrategy, s.translationPattern != null ? s.translationPattern.pattern() : null))
+                .map(s -> NameNormalizerFactory.getNormalizer(s.translationStrategy,
+                        s.translationPattern != null ? s.translationPattern.pattern() : null))
                 .orElse(null);
         final SchemaKey schemaKey = new SchemaKey(catalog, schemaName, tableName);
         final TableSchema tableSchema;
         try {
             tableSchema = schemaCache.get(schemaKey, key -> {
                 try {
-                    final TableSchema schema = TableSchema.from(con, catalog, schemaName, tableName, settings.translateFieldNames, normalizer, updateKeys, log);
+                    final TableSchema schema = TableSchema.from(con, catalog, schemaName, tableName,
+                            settings.translateFieldNames, normalizer, updateKeys, log);
                     getLogger().debug("Fetched Table Schema {} for table name {}", schema, tableName);
                     return schema;
                 } catch (SQLException e) {
@@ -1429,15 +1540,20 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                         if (INSERT_TYPE.equalsIgnoreCase(statementType)) {
                             sqlHolder = generateInsert(recordSchema, fqTableName, tableSchema, settings, normalizer);
                         } else if (UPDATE_TYPE.equalsIgnoreCase(statementType)) {
-                            sqlHolder = generateUpdate(recordSchema, fqTableName, updateKeys, tableSchema, settings, normalizer);
+                            sqlHolder = generateUpdate(recordSchema, fqTableName, updateKeys, tableSchema, settings,
+                                    normalizer);
                         } else if (DELETE_TYPE.equalsIgnoreCase(statementType)) {
-                            sqlHolder = generateDelete(recordSchema, fqTableName, deleteKeys, tableSchema, settings, normalizer);
+                            sqlHolder = generateDelete(recordSchema, fqTableName, deleteKeys, tableSchema, settings,
+                                    normalizer);
                         } else if (UPSERT_TYPE.equalsIgnoreCase(statementType)) {
-                            sqlHolder = generateUpsert(recordSchema, fqTableName, updateKeys, tableSchema, settings, normalizer);
+                            sqlHolder = generateUpsert(recordSchema, fqTableName, updateKeys, tableSchema, settings,
+                                    normalizer);
                         } else if (INSERT_IGNORE_TYPE.equalsIgnoreCase(statementType)) {
-                            sqlHolder = generateInsertIgnore(recordSchema, fqTableName, tableSchema, settings, normalizer);
+                            sqlHolder = generateInsertIgnore(recordSchema, fqTableName, tableSchema, settings,
+                                    normalizer);
                         } else {
-                            throw new IllegalArgumentException(format("Statement Type %s is not valid, FlowFile %s", statementType, flowFile));
+                            throw new IllegalArgumentException(
+                                    format("Statement Type %s is not valid, FlowFile %s", statementType, flowFile));
                         }
 
                         // Log debug sqlHolder
@@ -1448,7 +1564,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                         try {
                             preparedStatement.setQueryTimeout(timeoutMillis); // timeout in seconds
                         } catch (final SQLException se) {
-                            // If the driver doesn't support query timeout, then assume it is "infinite". Allow a timeout of zero only
+                            // If the driver doesn't support query timeout, then assume it is "infinite".
+                            // Allow a timeout of zero only
                             if (timeoutMillis > 0) {
                                 throw se;
                             }
@@ -1460,12 +1577,14 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                     }
 
                     final PreparedStatement ps = preparedSqlAndColumns.getPreparedStatement();
-                    final List<Integer> fieldIndexes = preparedSqlAndColumns.getSqlAndIncludedColumns().getFieldIndexes();
+                    final List<Integer> fieldIndexes = preparedSqlAndColumns.getSqlAndIncludedColumns()
+                            .getFieldIndexes();
                     final String sql = preparedSqlAndColumns.getSqlAndIncludedColumns().getSql();
 
                     if (ps != lastPreparedStatement && lastPreparedStatement != null) {
                         batchIndex++;
-                        log.debug("Executing query {} because Statement Type changed between Records for {}; fieldIndexes: {}; batch index: {}; batch size: {}",
+                        log.debug(
+                                "Executing query {} because Statement Type changed between Records for {}; fieldIndexes: {}; batch index: {}; batch size: {}",
                                 sql, flowFile, fieldIndexes, batchIndex, currentBatchSize);
                         lastPreparedStatement.executeBatch();
 
@@ -1486,21 +1605,26 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                         final DataType dataType = dataTypes.get(currentFieldIndex);
                         final int fieldSqlType = DataTypeUtils.getSQLTypeValue(dataType);
                         final String fieldName = recordSchema.getField(currentFieldIndex).getFieldName();
-                        String columnName = TableSchema.normalizedName(fieldName, settings.translateFieldNames, normalizer);
+                        String columnName = TableSchema.normalizedName(fieldName, settings.translateFieldNames,
+                                normalizer);
                         int sqlType;
 
                         final ColumnDescription column = columns.get(columnName);
-                        // 'column' should not be null here as the fieldIndexes should correspond to fields that match table columns, but better to handle just in case
+                        // 'column' should not be null here as the fieldIndexes should correspond to
+                        // fields that match table columns, but better to handle just in case
                         if (column == null) {
                             if (!settings.ignoreUnmappedFields) {
-                                throw new SQLDataException("Cannot map field '" + fieldName + "' to any column in the database\n"
-                                        + (settings.translateFieldNames ? "Normalized " : "") + "Columns: " + String.join(",", columns.keySet()));
+                                throw new SQLDataException(
+                                        "Cannot map field '" + fieldName + "' to any column in the database\n"
+                                                + (settings.translateFieldNames ? "Normalized " : "") + "Columns: "
+                                                + String.join(",", columns.keySet()));
                             } else {
                                 sqlType = fieldSqlType;
                             }
                         } else {
                             sqlType = column.getDataType();
-                            // SQLServer returns -150 for sql_variant from DatabaseMetaData though the server expects -156 when setting a sql_variant parameter
+                            // SQLServer returns -150 for sql_variant from DatabaseMetaData though the
+                            // server expects -156 when setting a sql_variant parameter
                             if (sqlType == -150) {
                                 sqlType = -156;
                             }
@@ -1515,13 +1639,15 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                                     targetDataType = DataTypeUtils.getDataTypeFromSQLTypeValue(fieldSqlType);
                                 }
                                 if (targetDataType != null) {
-                                    if (sqlType == Types.BLOB || sqlType == Types.BINARY || sqlType == Types.VARBINARY || sqlType == Types.LONGVARBINARY) {
+                                    if (sqlType == Types.BLOB || sqlType == Types.BINARY || sqlType == Types.VARBINARY
+                                            || sqlType == Types.LONGVARBINARY) {
                                         if (currentValue instanceof Object[]) {
                                             // Convert Object[Byte] arrays to byte[]
                                             Object[] src = (Object[]) currentValue;
                                             if (src.length > 0) {
                                                 if (!(src[0] instanceof Byte)) {
-                                                    throw new IllegalTypeConversionException("Cannot convert value " + currentValue + " to BLOB/BINARY/VARBINARY/LONGVARBINARY");
+                                                    throw new IllegalTypeConversionException("Cannot convert value "
+                                                            + currentValue + " to BLOB/BINARY/VARBINARY/LONGVARBINARY");
                                                 }
                                             }
                                             byte[] dest = new byte[src.length];
@@ -1532,13 +1658,15 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                                         } else if (currentValue instanceof String stringValue) {
                                             if (BINARY_STRING_FORMAT_BASE64.getValue().equals(binaryStringFormat)) {
                                                 currentValue = Base64.getDecoder().decode(stringValue);
-                                            } else if (BINARY_STRING_FORMAT_HEXADECIMAL.getValue().equals(binaryStringFormat)) {
+                                            } else if (BINARY_STRING_FORMAT_HEXADECIMAL.getValue()
+                                                    .equals(binaryStringFormat)) {
                                                 currentValue = HexFormat.of().parseHex(stringValue);
                                             } else {
                                                 currentValue = stringValue.getBytes(StandardCharsets.UTF_8);
                                             }
                                         } else if (currentValue != null && !(currentValue instanceof byte[])) {
-                                            throw new IllegalTypeConversionException("Cannot convert value " + currentValue + " to BLOB/BINARY/VARBINARY/LONGVARBINARY");
+                                            throw new IllegalTypeConversionException("Cannot convert value "
+                                                    + currentValue + " to BLOB/BINARY/VARBINARY/LONGVARBINARY");
                                         }
                                     } else {
                                         currentValue = DataTypeUtils.convertType(
@@ -1548,23 +1676,27 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                                     }
                                 }
                             } catch (IllegalTypeConversionException itce) {
-                                // If the field and column types don't match or the value can't otherwise be converted to the column datatype,
+                                // If the field and column types don't match or the value can't otherwise be
+                                // converted to the column datatype,
                                 // try with the original object and field datatype
                                 sqlType = DataTypeUtils.getSQLTypeValue(dataType);
                             }
                         }
 
-                        // If DELETE type, insert the object twice if the column is nullable because of the null check (see generateDelete for details)
+                        // If DELETE type, insert the object twice if the column is nullable because of
+                        // the null check (see generateDelete for details)
                         if (DELETE_TYPE.equalsIgnoreCase(statementType)) {
                             setParameter(ps, ++deleteIndex, currentValue, fieldSqlType, sqlType);
                             if (column != null && column.isNullable()) {
                                 setParameter(ps, ++deleteIndex, currentValue, fieldSqlType, sqlType);
                             }
                         } else if (UPSERT_TYPE.equalsIgnoreCase(statementType)) {
-                            // Calculate the number of times to set the parameter based on parameters divided by number of field indexes
-                            final int timesToAddObjects =  preparedSqlAndColumns.parameterCount / fieldIndexes.size();
+                            // Calculate the number of times to set the parameter based on parameters
+                            // divided by number of field indexes
+                            final int timesToAddObjects = preparedSqlAndColumns.parameterCount / fieldIndexes.size();
                             for (int j = 0; j < timesToAddObjects; j++) {
-                                setParameter(ps, i + (fieldIndexes.size() * j) + 1, currentValue, fieldSqlType, sqlType);
+                                setParameter(ps, i + (fieldIndexes.size() * j) + 1, currentValue, fieldSqlType,
+                                        sqlType);
                             }
                         } else {
                             setParameter(ps, i + 1, currentValue, fieldSqlType, sqlType);
@@ -1575,7 +1707,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                     session.adjustCounter(statementType + " updates performed", 1, false);
                     if (++currentBatchSize == maxBatchSize) {
                         batchIndex++;
-                        log.debug("Executing query {} because batch reached max size for {}; fieldIndexes: {}; batch index: {}; batch size: {}",
+                        log.debug(
+                                "Executing query {} because batch reached max size for {}; fieldIndexes: {}; batch index: {}; batch size: {}",
                                 sql, flowFile, fieldIndexes, batchIndex, currentBatchSize);
                         session.adjustCounter("Batches Executed", 1, false);
                         ps.executeBatch();
@@ -1595,9 +1728,11 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         }
     }
 
-    private void setParameter(PreparedStatement ps, int index, Object value, int fieldSqlType, int sqlType) throws IOException {
+    private void setParameter(PreparedStatement ps, int index, Object value, int fieldSqlType, int sqlType)
+            throws IOException {
         if (sqlType == Types.BLOB) {
-            // Convert Byte[] or String (anything that has been converted to byte[]) into BLOB
+            // Convert Byte[] or String (anything that has been converted to byte[]) into
+            // BLOB
             if (fieldSqlType == Types.ARRAY || fieldSqlType == Types.VARCHAR) {
                 if (!(value instanceof byte[])) {
                     if (value == null) {
@@ -1608,7 +1743,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                             throw new IOException("Unable to setNull() on prepared statement", e);
                         }
                     } else {
-                        throw new IOException("Expected BLOB to be of type byte[] but is instead " + value.getClass().getName());
+                        throw new IOException(
+                                "Expected BLOB to be of type byte[] but is instead " + value.getClass().getName());
                     }
                 }
                 byte[] byteArray = (byte[]) value;
@@ -1618,7 +1754,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                     throw new IOException("Unable to parse binary data " + value, e);
                 }
             } else {
-                try (InputStream inputStream = new ByteArrayInputStream(value.toString().getBytes(StandardCharsets.UTF_8))) {
+                try (InputStream inputStream = new ByteArrayInputStream(
+                        value.toString().getBytes(StandardCharsets.UTF_8))) {
                     ps.setBlob(index, inputStream);
                 } catch (IOException | SQLException e) {
                     throw new IOException("Unable to parse binary data " + value, e);
@@ -1651,7 +1788,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                             throw new IOException("Unable to setNull() on prepared statement", e);
                         }
                     } else {
-                        throw new IOException("Expected VARBINARY/LONGVARBINARY to be of type byte[] but is instead " + value.getClass().getName());
+                        throw new IOException("Expected VARBINARY/LONGVARBINARY to be of type byte[] but is instead "
+                                + value.getClass().getName());
                     }
                 }
                 byte[] byteArray = (byte[]) value;
@@ -1671,7 +1809,9 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
             }
         } else {
             try {
-                // If the specified field type is OTHER and the SQL type is VARCHAR, the conversion went ok as a string literal but try the OTHER type when setting the parameter. If an error occurs,
+                // If the specified field type is OTHER and the SQL type is VARCHAR, the
+                // conversion went ok as a string literal but try the OTHER type when setting
+                // the parameter. If an error occurs,
                 // try the normal way of using the sqlType
                 // This helps with PostgreSQL enums and possibly other scenarios
                 if (fieldSqlType == Types.OTHER && sqlType == Types.VARCHAR) {
@@ -1685,7 +1825,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                     ps.setObject(index, value, sqlType);
                 }
             } catch (SQLException e) {
-                throw new IOException("Unable to setObject() with value " + value + " at index " + index + " of type " + sqlType, e);
+                throw new IOException(
+                        "Unable to setObject() with value " + value + " at index " + index + " of type " + sqlType, e);
             }
         }
     }
@@ -1698,13 +1839,16 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         final RecordPathResult result = dataRecordPath.evaluate(outerRecord);
         final List<FieldValue> fieldValues = result.getSelectedFields().toList();
         if (fieldValues.isEmpty()) {
-            throw new ProcessException("RecordPath " + dataRecordPath.getPath() + " evaluated against Record yielded no results.");
+            throw new ProcessException(
+                    "RecordPath " + dataRecordPath.getPath() + " evaluated against Record yielded no results.");
         }
 
         for (final FieldValue fieldValue : fieldValues) {
             final RecordFieldType fieldType = fieldValue.getField().getDataType().getFieldType();
             if (fieldType != RecordFieldType.RECORD) {
-                throw new ProcessException("RecordPath " + dataRecordPath.getPath() + " evaluated against Record expected to return one or more Records but encountered field of type" +
+                throw new ProcessException("RecordPath " + dataRecordPath.getPath()
+                        + " evaluated against Record expected to return one or more Records but encountered field of type"
+                        +
                         " " + fieldType);
             }
         }
@@ -1717,7 +1861,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         return dataRecords;
     }
 
-    String generateTableName(final DMLSettings settings, final String catalog, final String schemaName, final String tableName, final TableSchema tableSchema) {
+    String generateTableName(final DMLSettings settings, final String catalog, final String schemaName,
+            final String tableName, final TableSchema tableSchema) {
         final StringBuilder tableNameBuilder = new StringBuilder();
         if (catalog != null) {
             if (settings.quoteTableName) {
@@ -1754,15 +1899,18 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         return tableNameBuilder.toString();
     }
 
-    private Set<String> getNormalizedColumnNames(final RecordSchema schema, final boolean translateFieldNames, NameNormalizer normalizer) {
+    private Set<String> getNormalizedColumnNames(final RecordSchema schema, final boolean translateFieldNames,
+            NameNormalizer normalizer) {
         final Set<String> normalizedFieldNames = new HashSet<>();
         if (schema != null) {
-            schema.getFieldNames().forEach((fieldName) -> normalizedFieldNames.add(TableSchema.normalizedName(fieldName, translateFieldNames, normalizer)));
+            schema.getFieldNames().forEach((fieldName) -> normalizedFieldNames
+                    .add(TableSchema.normalizedName(fieldName, translateFieldNames, normalizer)));
         }
         return normalizedFieldNames;
     }
 
-    SqlAndIncludedColumns generateInsert(final RecordSchema recordSchema, final String tableName, final TableSchema tableSchema, final DMLSettings settings, NameNormalizer normalizer)
+    SqlAndIncludedColumns generateInsert(final RecordSchema recordSchema, final String tableName,
+            final TableSchema tableSchema, final DMLSettings settings, NameNormalizer normalizer)
             throws IllegalArgumentException, SQLException {
 
         checkValuesForRequiredColumns(recordSchema, tableSchema, settings, normalizer);
@@ -1772,7 +1920,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         sqlBuilder.append(tableName);
         sqlBuilder.append(" (");
 
-        // iterate over all of the fields in the record, building the SQL statement by adding the column names
+        // iterate over all of the fields in the record, building the SQL statement by
+        // adding the column names
         List<String> fieldNames = recordSchema.getFieldNames();
         final List<Integer> includedColumns = new ArrayList<>();
         if (fieldNames != null) {
@@ -1783,10 +1932,12 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                 RecordField field = recordSchema.getField(i);
                 String fieldName = field.getFieldName();
 
-                final ColumnDescription desc = tableSchema.getColumns().get(TableSchema.normalizedName(fieldName, settings.translateFieldNames, normalizer));
+                final ColumnDescription desc = tableSchema.getColumns()
+                        .get(TableSchema.normalizedName(fieldName, settings.translateFieldNames, normalizer));
                 if (desc == null && !settings.ignoreUnmappedFields) {
                     throw new SQLDataException("Cannot map field '" + fieldName + "' to any column in the database\n"
-                            + (settings.translateFieldNames ? "Normalized " : "") + "Columns: " + String.join(",", tableSchema.getColumns().keySet()));
+                            + (settings.translateFieldNames ? "Normalized " : "") + "Columns: "
+                            + String.join(",", tableSchema.getColumns().keySet()));
                 }
 
                 if (desc != null) {
@@ -1805,35 +1956,42 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                 } else {
                     // User is ignoring unmapped fields, but log at debug level just in case
                     getLogger().debug("Did not map field '{}' to any column in the database\n{}Columns: {}",
-                            fieldName, (settings.translateFieldNames ? "Normalized " : ""), String.join(",", tableSchema.getColumns().keySet()));
+                            fieldName, (settings.translateFieldNames ? "Normalized " : ""),
+                            String.join(",", tableSchema.getColumns().keySet()));
                 }
             }
 
-            // complete the SQL statements by adding ?'s for all of the values to be escaped.
+            // complete the SQL statements by adding ?'s for all of the values to be
+            // escaped.
             sqlBuilder.append(") VALUES (");
             sqlBuilder.append(StringUtils.repeat("?", ",", includedColumns.size()));
             sqlBuilder.append(")");
 
             if (fieldsFound.get() == 0) {
-                throw new SQLDataException("None of the fields in the record map to the columns defined by the " + tableName + " table\n"
-                        + (settings.translateFieldNames ? "Normalized " : "") + "Columns: " + String.join(",", tableSchema.getColumns().keySet()));
+                throw new SQLDataException(
+                        "None of the fields in the record map to the columns defined by the " + tableName + " table\n"
+                                + (settings.translateFieldNames ? "Normalized " : "") + "Columns: "
+                                + String.join(",", tableSchema.getColumns().keySet()));
             }
         }
         return new SqlAndIncludedColumns(sqlBuilder.toString(), includedColumns);
     }
 
-    SqlAndIncludedColumns generateUpdate(final RecordSchema recordSchema, final String tableName, final String updateKeys,
-                                         final TableSchema tableSchema, final DMLSettings settings, NameNormalizer normalizer)
+    SqlAndIncludedColumns generateUpdate(final RecordSchema recordSchema, final String tableName,
+            final String updateKeys,
+            final TableSchema tableSchema, final DMLSettings settings, NameNormalizer normalizer)
             throws IllegalArgumentException, MalformedRecordException, SQLException {
 
         final Set<String> keyColumnNames = getUpdateKeyColumnNames(tableName, updateKeys, tableSchema);
-        final Set<String> normalizedKeyColumnNames = normalizeKeyColumnNamesAndCheckForValues(recordSchema, updateKeys, settings, keyColumnNames, normalizer);
+        final Set<String> normalizedKeyColumnNames = normalizeKeyColumnNamesAndCheckForValues(recordSchema, updateKeys,
+                settings, keyColumnNames, normalizer);
 
         final StringBuilder sqlBuilder = new StringBuilder();
         sqlBuilder.append("UPDATE ");
         sqlBuilder.append(tableName);
 
-        // iterate over all the fields in the record, building the SQL statement by adding the column names
+        // iterate over all the fields in the record, building the SQL statement by
+        // adding the column names
         List<String> fieldNames = recordSchema.getFieldNames();
         final List<Integer> includedColumns = new ArrayList<>();
         if (fieldNames != null) {
@@ -1846,16 +2004,21 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                 RecordField field = recordSchema.getField(i);
                 String fieldName = field.getFieldName();
 
-                final String normalizedColName = TableSchema.normalizedName(fieldName, settings.translateFieldNames, normalizer);
-                final ColumnDescription desc = tableSchema.getColumns().get(TableSchema.normalizedName(fieldName, settings.translateFieldNames, normalizer));
+                final String normalizedColName = TableSchema.normalizedName(fieldName, settings.translateFieldNames,
+                        normalizer);
+                final ColumnDescription desc = tableSchema.getColumns()
+                        .get(TableSchema.normalizedName(fieldName, settings.translateFieldNames, normalizer));
                 if (desc == null) {
                     if (!settings.ignoreUnmappedFields) {
-                        throw new SQLDataException("Cannot map field '" + fieldName + "' to any column in the database\n"
-                                + (settings.translateFieldNames ? "Normalized " : "") + "Columns: " + String.join(",", tableSchema.getColumns().keySet()));
+                        throw new SQLDataException(
+                                "Cannot map field '" + fieldName + "' to any column in the database\n"
+                                        + (settings.translateFieldNames ? "Normalized " : "") + "Columns: "
+                                        + String.join(",", tableSchema.getColumns().keySet()));
                     } else {
                         // User is ignoring unmapped fields, but log at debug level just in case
                         getLogger().debug("Did not map field '{}' to any column in the database\nColumns: {}",
-                                fieldName, (settings.translateFieldNames ? "Normalized " : ""), String.join(",", tableSchema.getColumns().keySet()));
+                                fieldName, (settings.translateFieldNames ? "Normalized " : ""),
+                                String.join(",", tableSchema.getColumns().keySet()));
                         continue;
                     }
                 }
@@ -1886,8 +2049,10 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                 String fieldName = field.getFieldName();
                 boolean firstUpdateKey = true;
 
-                final String normalizedColName = TableSchema.normalizedName(fieldName, settings.translateFieldNames, normalizer);
-                final ColumnDescription desc = tableSchema.getColumns().get(TableSchema.normalizedName(fieldName, settings.translateFieldNames, normalizer));
+                final String normalizedColName = TableSchema.normalizedName(fieldName, settings.translateFieldNames,
+                        normalizer);
+                final ColumnDescription desc = tableSchema.getColumns()
+                        .get(TableSchema.normalizedName(fieldName, settings.translateFieldNames, normalizer));
                 if (desc != null) {
 
                     // Check if this column is a Update Key. If so, add it to the WHERE clause
@@ -1917,15 +2082,19 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         return new SqlAndIncludedColumns(sqlBuilder.toString(), includedColumns);
     }
 
-    SqlAndIncludedColumns generateDelete(final RecordSchema recordSchema, final String tableName, String deleteKeys, final TableSchema tableSchema,
-                                         final DMLSettings settings, NameNormalizer normalizer)
+    SqlAndIncludedColumns generateDelete(final RecordSchema recordSchema, final String tableName, String deleteKeys,
+            final TableSchema tableSchema,
+            final DMLSettings settings, NameNormalizer normalizer)
             throws IllegalArgumentException, MalformedRecordException, SQLDataException {
 
-        final Set<String> normalizedFieldNames = getNormalizedColumnNames(recordSchema, settings.translateFieldNames, normalizer);
+        final Set<String> normalizedFieldNames = getNormalizedColumnNames(recordSchema, settings.translateFieldNames,
+                normalizer);
         for (final String requiredColName : tableSchema.getRequiredColumnNames()) {
-            final String normalizedColName = TableSchema.normalizedName(requiredColName, settings.translateFieldNames, normalizer);
+            final String normalizedColName = TableSchema.normalizedName(requiredColName, settings.translateFieldNames,
+                    normalizer);
             if (!normalizedFieldNames.contains(normalizedColName)) {
-                String missingColMessage = "Record does not have a value for the Required column '" + requiredColName + "'";
+                String missingColMessage = "Record does not have a value for the Required column '" + requiredColName
+                        + "'";
                 if (settings.failUnmappedColumns) {
                     getLogger().error(missingColMessage);
                     throw new MalformedRecordException(missingColMessage);
@@ -1939,7 +2108,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         sqlBuilder.append("DELETE FROM ");
         sqlBuilder.append(tableName);
 
-        // iterate over all of the fields in the record, building the SQL statement by adding the column names
+        // iterate over all of the fields in the record, building the SQL statement by
+        // adding the column names
         final List<String> fieldNames = recordSchema.getFieldNames();
         final List<Integer> includedColumns = new ArrayList<>();
         if (fieldNames != null) {
@@ -1966,10 +2136,12 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                 RecordField field = recordSchema.getField(i);
                 String fieldName = field.getFieldName();
 
-                final ColumnDescription desc = tableSchema.getColumns().get(TableSchema.normalizedName(fieldName, settings.translateFieldNames, normalizer));
+                final ColumnDescription desc = tableSchema.getColumns()
+                        .get(TableSchema.normalizedName(fieldName, settings.translateFieldNames, normalizer));
                 if (desc == null && !settings.ignoreUnmappedFields) {
                     throw new SQLDataException("Cannot map field '" + fieldName + "' to any column in the database\n"
-                            + (settings.translateFieldNames ? "Normalized " : "") + "Columns: " + String.join(",", tableSchema.getColumns().keySet()));
+                            + (settings.translateFieldNames ? "Normalized " : "") + "Columns: "
+                            + String.join(",", tableSchema.getColumns().keySet()));
                 }
 
                 if (desc != null) {
@@ -1979,18 +2151,23 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
 
                     String columnName;
                     if (settings.escapeColumnNames) {
-                        columnName = tableSchema.getQuotedIdentifierString() + desc.getColumnName() + tableSchema.getQuotedIdentifierString();
+                        columnName = tableSchema.getQuotedIdentifierString() + desc.getColumnName()
+                                + tableSchema.getQuotedIdentifierString();
                     } else {
                         columnName = desc.getColumnName();
                     }
-                    // Need to build a null-safe construct for the WHERE clause, since we are using PreparedStatement and won't know if the values are null. If they are null,
-                    // then the filter should be "column IS null" vs "column = null". Since we don't know whether the value is null, we can use the following construct (from NIFI-3742):
-                    //   (column = ? OR (column is null AND ? is null))
+                    // Need to build a null-safe construct for the WHERE clause, since we are using
+                    // PreparedStatement and won't know if the values are null. If they are null,
+                    // then the filter should be "column IS null" vs "column = null". Since we don't
+                    // know whether the value is null, we can use the following construct (from
+                    // NIFI-3742):
+                    // (column = ? OR (column is null AND ? is null))
                     sqlBuilder.append("(");
                     sqlBuilder.append(columnName);
                     sqlBuilder.append(" = ?");
 
-                    // Only need null check if the column is nullable, otherwise the row wouldn't exist
+                    // Only need null check if the column is nullable, otherwise the row wouldn't
+                    // exist
                     if (desc.isNullable()) {
                         sqlBuilder.append(" OR (");
                         sqlBuilder.append(columnName);
@@ -2002,42 +2179,54 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
                 } else {
                     // User is ignoring unmapped fields, but log at debug level just in case
                     getLogger().debug("Did not map field '{}' to any column in the database\n{}Columns: {}",
-                            fieldName, (settings.translateFieldNames ? "Normalized " : ""), String.join(",", tableSchema.getColumns().keySet()));
+                            fieldName, (settings.translateFieldNames ? "Normalized " : ""),
+                            String.join(",", tableSchema.getColumns().keySet()));
                 }
             }
 
             if (fieldsFound.get() == 0) {
-                throw new SQLDataException("None of the fields in the record map to the columns defined by the " + tableName + " table\n"
-                        + (settings.translateFieldNames ? "Normalized " : "") + "Columns: " + String.join(",", tableSchema.getColumns().keySet()));
+                throw new SQLDataException(
+                        "None of the fields in the record map to the columns defined by the " + tableName + " table\n"
+                                + (settings.translateFieldNames ? "Normalized " : "") + "Columns: "
+                                + String.join(",", tableSchema.getColumns().keySet()));
             }
         }
 
         return new SqlAndIncludedColumns(sqlBuilder.toString(), includedColumns);
     }
 
-    SqlAndIncludedColumns generateUpsert(final RecordSchema recordSchema, final String tableName, final String updateKeys,
-                                        final TableSchema tableSchema, final DMLSettings settings, NameNormalizer normalizer)
+    SqlAndIncludedColumns generateUpsert(final RecordSchema recordSchema, final String tableName,
+            final String updateKeys,
+            final TableSchema tableSchema, final DMLSettings settings, NameNormalizer normalizer)
             throws IllegalArgumentException, MalformedRecordException, SQLException {
-        // For UPSERT, we'll use a simplified approach - generate INSERT and handle conflicts
-        // This is a basic implementation - in practice, you'd want to use database-specific UPSERT syntax
+        // For UPSERT, we'll use a simplified approach - generate INSERT and handle
+        // conflicts
+        // This is a basic implementation - in practice, you'd want to use
+        // database-specific UPSERT syntax
         return generateInsert(recordSchema, tableName, tableSchema, settings, normalizer);
     }
 
-    SqlAndIncludedColumns generateInsertIgnore(final RecordSchema recordSchema, final String tableName, final TableSchema tableSchema,
-                                               final DMLSettings settings, NameNormalizer normalizer)
+    SqlAndIncludedColumns generateInsertIgnore(final RecordSchema recordSchema, final String tableName,
+            final TableSchema tableSchema,
+            final DMLSettings settings, NameNormalizer normalizer)
             throws IllegalArgumentException, SQLException {
         // For INSERT_IGNORE, we'll use a simplified approach - generate INSERT
-        // This is a basic implementation - in practice, you'd want to use database-specific INSERT IGNORE syntax
+        // This is a basic implementation - in practice, you'd want to use
+        // database-specific INSERT IGNORE syntax
         return generateInsert(recordSchema, tableName, tableSchema, settings, normalizer);
     }
 
-    private void checkValuesForRequiredColumns(RecordSchema recordSchema, TableSchema tableSchema, DMLSettings settings, NameNormalizer normalizer) {
-        final Set<String> normalizedFieldNames = getNormalizedColumnNames(recordSchema, settings.translateFieldNames, normalizer);
+    private void checkValuesForRequiredColumns(RecordSchema recordSchema, TableSchema tableSchema, DMLSettings settings,
+            NameNormalizer normalizer) {
+        final Set<String> normalizedFieldNames = getNormalizedColumnNames(recordSchema, settings.translateFieldNames,
+                normalizer);
 
         for (final String requiredColName : tableSchema.getRequiredColumnNames()) {
-            final String normalizedColName = TableSchema.normalizedName(requiredColName, settings.translateFieldNames, normalizer);
+            final String normalizedColName = TableSchema.normalizedName(requiredColName, settings.translateFieldNames,
+                    normalizer);
             if (!normalizedFieldNames.contains(normalizedColName)) {
-                String missingColMessage = "Record does not have a value for the Required column '" + requiredColName + "'";
+                String missingColMessage = "Record does not have a value for the Required column '" + requiredColName
+                        + "'";
                 if (settings.failUnmappedColumns) {
                     getLogger().error(missingColMessage);
                     throw new IllegalArgumentException(missingColMessage);
@@ -2048,7 +2237,8 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         }
     }
 
-    private Set<String> getUpdateKeyColumnNames(String tableName, String updateKeys, TableSchema tableSchema) throws SQLIntegrityConstraintViolationException {
+    private Set<String> getUpdateKeyColumnNames(String tableName, String updateKeys, TableSchema tableSchema)
+            throws SQLIntegrityConstraintViolationException {
         final Set<String> updateKeyColumnNames;
 
         if (updateKeys == null) {
@@ -2061,24 +2251,30 @@ public class ValidatedPutDatabaseRecord extends AbstractProcessor {
         }
 
         if (updateKeyColumnNames.isEmpty()) {
-            throw new SQLIntegrityConstraintViolationException("Table '" + tableName + "' not found or does not have a Primary Key and no Update Keys were specified");
+            throw new SQLIntegrityConstraintViolationException("Table '" + tableName
+                    + "' not found or does not have a Primary Key and no Update Keys were specified");
         }
 
         return updateKeyColumnNames;
     }
 
-    private Set<String> normalizeKeyColumnNamesAndCheckForValues(RecordSchema recordSchema, String updateKeys, DMLSettings settings, Set<String> updateKeyColumnNames, NameNormalizer normalizer)
+    private Set<String> normalizeKeyColumnNamesAndCheckForValues(RecordSchema recordSchema, String updateKeys,
+            DMLSettings settings, Set<String> updateKeyColumnNames, NameNormalizer normalizer)
             throws MalformedRecordException {
-        // Create a Set of all normalized Update Key names, and ensure that there is a field in the record
+        // Create a Set of all normalized Update Key names, and ensure that there is a
+        // field in the record
         // for each of the Update Key fields.
-        final Set<String> normalizedRecordFieldNames = getNormalizedColumnNames(recordSchema, settings.translateFieldNames, normalizer);
+        final Set<String> normalizedRecordFieldNames = getNormalizedColumnNames(recordSchema,
+                settings.translateFieldNames, normalizer);
 
         final Set<String> normalizedKeyColumnNames = new HashSet<>();
         for (final String updateKeyColumnName : updateKeyColumnNames) {
-            String normalizedKeyColumnName = TableSchema.normalizedName(updateKeyColumnName, settings.translateFieldNames, normalizer);
+            String normalizedKeyColumnName = TableSchema.normalizedName(updateKeyColumnName,
+                    settings.translateFieldNames, normalizer);
 
             if (!normalizedRecordFieldNames.contains(normalizedKeyColumnName)) {
-                String missingColMessage = "Record does not have a value for the " + (updateKeys == null ? "Primary" : "Update") + "Key column '" + updateKeyColumnName + "'";
+                String missingColMessage = "Record does not have a value for the "
+                        + (updateKeys == null ? "Primary" : "Update") + "Key column '" + updateKeyColumnName + "'";
                 if (settings.failUnmappedColumns) {
                     getLogger().error(missingColMessage);
                     throw new MalformedRecordException(missingColMessage);

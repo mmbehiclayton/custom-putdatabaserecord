@@ -1,7 +1,0 @@
-C:\Users\USER\projects\nifi-custom-putdbrecord-bundle\nifi-nifi-custom-putdbrecord-processors\src\main\java\com\sensys\nifi\processors\db\ColumnDescription.java
-C:\Users\USER\projects\nifi-custom-putdbrecord-bundle\nifi-nifi-custom-putdbrecord-processors\src\main\java\com\sensys\nifi\processors\db\NameNormalizer.java
-C:\Users\USER\projects\nifi-custom-putdbrecord-bundle\nifi-nifi-custom-putdbrecord-processors\src\main\java\com\sensys\nifi\processors\db\TranslationStrategy.java
-C:\Users\USER\projects\nifi-custom-putdbrecord-bundle\nifi-nifi-custom-putdbrecord-processors\src\main\java\com\sensys\nifi\processors\SimpleValidatedPutDatabaseRecord.java
-C:\Users\USER\projects\nifi-custom-putdbrecord-bundle\nifi-nifi-custom-putdbrecord-processors\src\main\java\com\sensys\nifi\processors\db\TableSchema.java
-C:\Users\USER\projects\nifi-custom-putdbrecord-bundle\nifi-nifi-custom-putdbrecord-processors\src\main\java\com\sensys\nifi\processors\db\NameNormalizerFactory.java
-C:\Users\USER\projects\nifi-custom-putdbrecord-bundle\nifi-nifi-custom-putdbrecord-processors\src\main\java\com\sensys\nifi\processors\ValidatedPutDatabaseRecord.java
